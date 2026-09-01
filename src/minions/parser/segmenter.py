@@ -339,18 +339,36 @@ class SectionSegmenter:
             level = dot_count + 1
             major_key = prefix.split(".")[0]
 
-            matched_c_type = CanonicalSectionType.OTHER
-            for c_type, pattern in self.CANONICAL_PATTERNS:
-                if pattern.search(norm_text) or pattern.search(heading_body):
-                    matched_c_type = c_type
-                    break
+            # Standalone headings that can legitimately override parent subsection inheritance
+            STANDALONE_OVERRIDE_PATTERNS = [
+                (CanonicalSectionType.DISCUSSION, re.compile(r"^(?:limitations?|broader\s+impacts?|threats\s+to\s+validity)$", re.I)),
+                (CanonicalSectionType.CONCLUSION, re.compile(r"^(?:conclusions?|future\s+work)$", re.I)),
+                (CanonicalSectionType.RELATED_WORK, re.compile(r"^(?:related\s+work|prior\s+work)$", re.I)),
+                (CanonicalSectionType.APPENDIX, re.compile(r"^(?:appendix|supplementary(?:\s+material)?)$", re.I)),
+            ]
 
-            # Inheritance logic for numbered subsections (e.g., 3.1, 3.2, 3.3, 3.4)
             if level > 1:
-                if matched_c_type == CanonicalSectionType.OTHER and major_key in major_section_canonical:
-                    matched_c_type = major_section_canonical[major_key]
+                # Subsection level > 1
+                if major_key in major_section_canonical:
+                    override_c_type = None
+                    for c_type, pat in STANDALONE_OVERRIDE_PATTERNS:
+                        if pat.match(heading_body.strip()):
+                            override_c_type = c_type
+                            break
+                    matched_c_type = override_c_type if override_c_type else major_section_canonical[major_key]
+                else:
+                    matched_c_type = CanonicalSectionType.OTHER
+                    for c_type, pattern in self.CANONICAL_PATTERNS:
+                        if pattern.search(norm_text) or pattern.search(heading_body):
+                            matched_c_type = c_type
+                            break
             else:
-                # Major section level 1: register in major_section_canonical
+                # Major section level 1: match canonical pattern and register in major_section_canonical
+                matched_c_type = CanonicalSectionType.OTHER
+                for c_type, pattern in self.CANONICAL_PATTERNS:
+                    if pattern.search(norm_text) or pattern.search(heading_body):
+                        matched_c_type = c_type
+                        break
                 if matched_c_type != CanonicalSectionType.OTHER:
                     major_section_canonical[major_key] = matched_c_type
 
