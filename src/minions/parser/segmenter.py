@@ -70,7 +70,8 @@ class SectionSegmenter:
         (
             CanonicalSectionType.APPENDIX,
             re.compile(
-                r"\b(?:appendix|supplement(?:ary)?(?:\s+material)?)\b", re.IGNORECASE
+                r"\b(?:appendix|appendices|supplementary(?:\s+material)?)\b|^(?:[A-Z]\.\s+[A-Z][a-z]{2,}\s+[A-Z])",
+                re.IGNORECASE,
             ),
         ),
     ]
@@ -134,6 +135,7 @@ class SectionSegmenter:
         sections_data: List[Dict] = []
         unassigned_blocks: List[RawBlock] = []
         existing_section_ids: Set[str] = set()
+        major_section_canonical: Dict[str, CanonicalSectionType] = {}
 
         # Default pre-intro section (for title/metadata blocks before Abstract or Intro)
         current_section = {
@@ -147,7 +149,7 @@ class SectionSegmenter:
 
         for block in normalized_blocks:
             is_heading, canonical_type, level, title = self._classify_heading(
-                block, base_font_size
+                block, base_font_size, major_section_canonical
             )
 
             # If we are already in References, only allow Appendix to break out
@@ -246,7 +248,10 @@ class SectionSegmenter:
         return sections, references, section_confidences, unassigned_count
 
     def _classify_heading(
-        self, block: RawBlock, base_font_size: float
+        self,
+        block: RawBlock,
+        base_font_size: float,
+        major_section_canonical: Optional[Dict[str, CanonicalSectionType]] = None,
     ) -> Tuple[bool, CanonicalSectionType, int, str]:
         """Determine if a block is a section header and classify its canonical type."""
         text = block.text.strip()
@@ -255,15 +260,25 @@ class SectionSegmenter:
             return False, CanonicalSectionType.OTHER, 1, ""
 
         all_spans = [span for line in block.lines for span in line.spans]
-        return self._classify_text_as_heading(text, base_font_size, all_spans)
+        target_map = major_section_canonical if major_section_canonical is not None else {}
+        return self._classify_text_as_heading(
+            text, base_font_size, all_spans, target_map
+        )
 
     def _classify_text_as_heading(
-        self, text: str, base_font_size: float, spans: List[any]
+        self,
+        text: str,
+        base_font_size: float,
+        spans: List[any],
+        major_section_canonical: Optional[Dict[str, CanonicalSectionType]] = None,
     ) -> Tuple[bool, CanonicalSectionType, int, str]:
         """Classify given text as heading based on patterns, small-caps normalization, and font metrics."""
         text = text.strip()
         if not text or len(text) > 100:
             return False, CanonicalSectionType.OTHER, 1, ""
+
+        if major_section_canonical is None:
+            major_section_canonical = {}
 
         # Normalize LaTeX small-caps spaced letters (e.g. 'A BSTRACT' -> 'ABSTRACT', '1 I NTRODUCTION' -> '1 INTRODUCTION')
         norm_text = re.sub(r"\b([A-Z])\s+([A-Z]{2,})\b", r"\1\2", text)
@@ -274,11 +289,30 @@ class SectionSegmenter:
         # Reject standalone numbers, punctuation fragments, author footnotes, and math expressions
         if re.match(r"^\d+$", norm_text):  # standalone page/section number
             return False, CanonicalSectionType.OTHER, 1, ""
+        if re.search(r"^(?:\d+\s+)?(?:https?://|www\.|doi:)", norm_text, re.I):
+            return False, CanonicalSectionType.OTHER, 1, ""
         if any(c in norm_text for c in ["∗", "*", "†", "‡", "§", "@", "{", "}", "=", "<", ">", "\\", "|", "#", "±", "%"]):
             return False, CanonicalSectionType.OTHER, 1, ""
-        if re.search(r"\b(?:arxiv|preprint|in proc|proceedings|journal|vol\.|pp\.|https?:|www\.)\b", norm_text, re.I):
+        if re.search(r"\b(?:arxiv|preprint|in proc|proceedings|journal|vol\.|pp\.)\b", norm_text, re.I):
             return False, CanonicalSectionType.OTHER, 1, ""
-        if norm_text.startswith("Figure ") or norm_text.startswith("Fig. ") or norm_text.startswith("Table ") or norm_text.startswith("Tab. "):
+        if norm_text.startswith(("Figure ", "Fig. ", "Table ", "Tab. ")):
+            return False, CanonicalSectionType.OTHER, 1, ""
+
+        # Reject generic isolated words from table cells / diagrams without numbering
+        if norm_text.lower() in [
+            "model",
+            "method",
+            "methods",
+            "training data",
+            "test data",
+            "validation data",
+            "input",
+            "output",
+            "layer",
+            "loss",
+            "resolution",
+            "relative error (%)",
+        ]:
             return False, CanonicalSectionType.OTHER, 1, ""
 
         # Reject footnote narrative sentences starting with footnote numbers e.g. "4 We still need..."
@@ -289,20 +323,21 @@ class SectionSegmenter:
         is_bold = any(s.flags & 2 or "bold" in s.font_name.lower() for s in spans) if spans else False
         is_font_large = avg_size >= (base_font_size + 0.8)
 
-        # Match canonical patterns first on normalized text
-        for c_type, pattern in self.CANONICAL_PATTERNS:
-            if pattern.search(norm_text) and len(norm_text.split()) <= 6:
-                return True, c_type, 1, norm_text
-
         # Match numbered section headings e.g. "1 Introduction", "3.2 Attention", "IV. Experiments"
         num_match = re.match(
             r"^(?:(?:\d+(?:\.\d+)*\.?)|(?:[IVXLCDM]+\.?)|(?:[A-Z]\.))\s+([A-Za-z].*)$", norm_text
         )
         if num_match:
+            prefix = norm_text[: num_match.start(1)].strip().rstrip(".")
             heading_body = num_match.group(1).strip()
+
             # Do not classify trailing sentence fragments as headings
-            if heading_body.endswith(".") and not heading_body.endswith("etc."):
+            if heading_body.endswith(".") and len(heading_body.split()) > 4 and not heading_body.endswith("etc."):
                 return False, CanonicalSectionType.OTHER, 1, ""
+
+            dot_count = prefix.count(".")
+            level = dot_count + 1
+            major_key = prefix.split(".")[0]
 
             matched_c_type = CanonicalSectionType.OTHER
             for c_type, pattern in self.CANONICAL_PATTERNS:
@@ -310,15 +345,21 @@ class SectionSegmenter:
                     matched_c_type = c_type
                     break
 
-            prefix = norm_text[: num_match.start(1)].strip()
-            dot_count = prefix.count(".")
-            level = min(3, dot_count + 1)
+            # Inheritance logic for numbered subsections (e.g., 3.1, 3.2, 3.3, 3.4)
+            if level > 1:
+                if matched_c_type == CanonicalSectionType.OTHER and major_key in major_section_canonical:
+                    matched_c_type = major_section_canonical[major_key]
+            else:
+                # Major section level 1: register in major_section_canonical
+                if matched_c_type != CanonicalSectionType.OTHER:
+                    major_section_canonical[major_key] = matched_c_type
+
             return True, matched_c_type, level, norm_text
 
-        # Match unnumbered prominent headings (must be bold or larger font and short title-cased)
-        if (is_font_large or is_bold) and len(norm_text.split()) <= 6 and not norm_text.endswith((".", ",", ";")):
-            for c_type, pattern in self.CANONICAL_PATTERNS:
-                if pattern.search(norm_text):
+        # Match unnumbered prominent canonical headings (must be Title Case / ALL CAPS, e.g. 'Abstract', 'References')
+        for c_type, pattern in self.CANONICAL_PATTERNS:
+            if pattern.search(norm_text) and len(norm_text.split()) <= 4:
+                if norm_text.isupper() or norm_text.istitle() or any(w.istitle() for w in norm_text.split()):
                     return True, c_type, 1, norm_text
 
         return False, CanonicalSectionType.OTHER, 1, ""
@@ -349,8 +390,12 @@ class SectionSegmenter:
         candidate_id = base_id
         if candidate_id in existing_ids:
             candidate_id = f"{base_id}_{slug}"
-        if candidate_id in existing_ids:
-            candidate_id = f"{candidate_id}_{index}"
+
+        dedup_counter = 2
+        original_candidate = candidate_id
+        while candidate_id in existing_ids:
+            candidate_id = f"{original_candidate}_{dedup_counter}"
+            dedup_counter += 1
 
         existing_ids.add(candidate_id)
         return candidate_id
@@ -413,37 +458,52 @@ class SectionSegmenter:
         return ref_entries
 
     def _extract_structured_reference_fields(self, ref_id: str, raw_text: str) -> Reference:
-        """Extract structured authors, year, title, and venue from reference text."""
-        # Year extraction (4 digits between 1900 and 2099)
-        year_match = re.search(r"\b(19\d\d|20\d\d)\b", raw_text)
+        """Extract structured authors, year, title, venue, and DOI/URL from reference text."""
+        text = re.sub(r"\s+", " ", raw_text).strip()
+        m = re.match(r"^(\[\d+\]|\d+\.)\s*(.*)", text, re.DOTALL)
+        body = m.group(2).strip() if m else text
+
+        # 1. Year extraction
+        year_match = re.search(r"\b(19\d\d|20\d\d)\b", body)
         year = int(year_match.group(1)) if year_match else None
 
-        # Title extraction heuristic (often in quotes or before journal/venue)
-        title = None
-        quoted = re.search(r'["“]([^"”]+)["”]', raw_text)
-        if quoted:
-            title = quoted.group(1).strip()
+        # 2. DOI / URL extraction
+        url_match = re.search(r"(https?://\S+|doi:\S+)", body, re.IGNORECASE)
+        doi_or_url = url_match.group(1).rstrip(".,;)") if url_match else None
 
-        # URL / DOI extraction
-        url_match = re.search(r"(https?://\S+|doi:\S+)", raw_text, re.IGNORECASE)
-        doi_or_url = url_match.group(1) if url_match else None
+        # 3. Authors, Title, and Venue parsing
+        # Split body into clauses on periods not preceded by single uppercase initials (e.g. 'Y. Bengio.')
+        parts = re.split(r"(?<!\b[A-Z])\.\s+", body)
+        parts = [p.strip() for p in parts if p.strip()]
 
-        # Authors heuristic (text before year or title)
-        authors = []
-        author_part = raw_text.split(str(year))[0] if year else raw_text[:80]
-        # Clean markers
-        author_part = re.sub(r"^\[\d+\]\s*|\d+\.\s*", "", author_part).strip()
-        if author_part:
-            raw_authors = re.split(r",| and | & ", author_part)
-            authors = [a.strip() for a in raw_authors if len(a.strip()) > 2][:8]
+        authors: List[str] = []
+        title: Optional[str] = None
+        venue: Optional[str] = None
+
+        if len(parts) >= 3:
+            author_str = parts[0]
+            title = parts[1].rstrip(".")
+            venue = ". ".join(parts[2:])
+        elif len(parts) == 2:
+            author_str = parts[0]
+            title = parts[1].rstrip(".")
+        else:
+            author_str = body
+
+        # Clean author names
+        raw_authors = re.split(r",| and | & ", author_str)
+        for a in raw_authors:
+            cleaned_a = re.sub(r"^\d+\.?\s*", "", a).strip()
+            if len(cleaned_a) > 1 and not re.match(r"^(?:in|proceedings|proc\.|vol|pp|page)\b", cleaned_a, re.I):
+                authors.append(cleaned_a)
 
         return Reference(
             ref_id=ref_id,
             raw_text=raw_text,
             title=title,
-            authors=authors,
+            authors=authors[:10],
             year=year,
-            venue=None,
+            venue=venue,
             doi_or_url=doi_or_url,
         )
 
