@@ -123,49 +123,68 @@ class LayoutEngine:
     def order_blocks_reading_sequence(
         self, blocks: List[RawBlock], page_width: float, page_height: float
     ) -> List[RawBlock]:
-        """Detect multi-column gutters and sort blocks: top full-width, left column, right column, bottom full-width."""
+        """Detect multi-column gutters and sort blocks: top full-width, left column, right column, bottom footers."""
         if not blocks:
             return []
 
-        # Margin detection
-        min_x0 = min(b.bbox[0] for b in blocks)
-        max_x1 = max(b.bbox[2] for b in blocks)
+        # 1. Separate running header and footer blocks (e.g., page numbers, journal banners)
+        headers: List[RawBlock] = []
+        footers: List[RawBlock] = []
+        body_blocks: List[RawBlock] = []
+
+        for b in blocks:
+            text = b.text.strip()
+            is_standalone_page_num = bool(re.match(r"^\d+$", text)) and len(text) <= 4
+            # Standard top header or bottom footer margin detection
+            if (b.bbox[1] < 55.0 or b.bbox[3] < 55.0) and (is_standalone_page_num or len(text) < 50):
+                headers.append(b)
+            elif (b.bbox[1] > (page_height - 70.0) or b.bbox[3] > (page_height - 60.0)) and (is_standalone_page_num or len(text) < 50):
+                footers.append(b)
+            else:
+                body_blocks.append(b)
+
+        if not body_blocks:
+            return headers + footers
+
+        # 2. Margin and column detection on body blocks
+        min_x0 = min(b.bbox[0] for b in body_blocks)
+        max_x1 = max(b.bbox[2] for b in body_blocks)
         content_width = max_x1 - min_x0
         mid_x = min_x0 + content_width / 2.0
 
-        # Check if page is multi-column:
-        # A 2-column page has blocks distinctly occupying left half (< mid_x - 10) and right half (> mid_x + 10)
-        left_blocks = [b for b in blocks if b.bbox[2] <= mid_x + 20 and (b.bbox[2] - b.bbox[0]) < content_width * 0.7]
-        right_blocks = [b for b in blocks if b.bbox[0] >= mid_x - 20 and (b.bbox[2] - b.bbox[0]) < content_width * 0.7]
+        left_blocks = [
+            b for b in body_blocks if b.bbox[2] <= mid_x + 15 and (b.bbox[2] - b.bbox[0]) < content_width * 0.65
+        ]
+        right_blocks = [
+            b for b in body_blocks if b.bbox[0] >= mid_x - 15 and (b.bbox[2] - b.bbox[0]) < content_width * 0.65
+        ]
         span_blocks = [
-            b for b in blocks if (b.bbox[2] - b.bbox[0]) >= content_width * 0.7 or (b.bbox[0] < mid_x and b.bbox[2] > mid_x)
+            b
+            for b in body_blocks
+            if (b.bbox[2] - b.bbox[0]) >= content_width * 0.65
+            or (b.bbox[0] < mid_x and b.bbox[2] > mid_x and b not in left_blocks and b not in right_blocks)
         ]
 
-        is_multi_column = (len(left_blocks) >= 2 and len(right_blocks) >= 2)
+        is_multi_column = len(left_blocks) >= 2 and len(right_blocks) >= 2
 
         if not is_multi_column:
-            # Single-column: sort purely top-to-bottom by y0, breaking ties by x0
-            return sorted(blocks, key=lambda b: (round(b.bbox[1] / 5.0) * 5.0, b.bbox[0]))
+            # Single-column: sort top-to-bottom
+            ordered_body = sorted(body_blocks, key=lambda b: (round(b.bbox[1] / 5.0) * 5.0, b.bbox[0]))
+            return headers + ordered_body + footers
 
-        # Multi-column ordering:
-        # Partition into horizontal bands divided by spanning blocks (like title, abstract, full-width figures)
-        # Sort spanning blocks by y0
+        # Multi-column ordering
         span_y_cuts: List[Tuple[float, float, RawBlock]] = []
         for sb in span_blocks:
             span_y_cuts.append((sb.bbox[1], sb.bbox[3], sb))
-
         span_y_cuts.sort(key=lambda x: x[0])
 
         ordered: List[RawBlock] = []
         current_y = 0.0
 
-        # Group column blocks between spanning blocks
         for y_top, y_bot, sb in span_y_cuts:
-            # All column blocks between current_y and y_top
-            inter_left = [b for b in left_blocks if b.bbox[1] >= current_y - 5 and b.bbox[3] <= y_top + 10]
-            inter_right = [b for b in right_blocks if b.bbox[1] >= current_y - 5 and b.bbox[3] <= y_top + 10]
+            inter_left = [b for b in left_blocks if b not in ordered and b.bbox[1] >= current_y - 5 and b.bbox[3] <= y_top + 10]
+            inter_right = [b for b in right_blocks if b not in ordered and b.bbox[1] >= current_y - 5 and b.bbox[3] <= y_top + 10]
 
-            # Sort top-to-bottom within left column, then right column
             inter_left.sort(key=lambda b: b.bbox[1])
             inter_right.sort(key=lambda b: b.bbox[1])
 
@@ -180,7 +199,7 @@ class LayoutEngine:
             ordered.append(sb)
             current_y = max(current_y, y_bot)
 
-        # Any remaining column blocks below the last spanning block
+        # Remaining column blocks below the last spanning block
         rem_left = [b for b in left_blocks if b not in ordered]
         rem_right = [b for b in right_blocks if b not in ordered]
         rem_span = [b for b in span_blocks if b not in ordered]
@@ -199,7 +218,7 @@ class LayoutEngine:
             b.column_index = 0
             ordered.append(b)
 
-        return ordered
+        return headers + ordered + footers
 
     @staticmethod
     def _clean_block_text(text: str) -> str:
