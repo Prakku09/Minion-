@@ -36,7 +36,7 @@ class SectionSegmenter:
         (
             CanonicalSectionType.METHODOLOGY,
             re.compile(
-                r"\b(?:method(?:ology)?|methods|proposed\s+(?:method|model|approach|architecture)|model\s+architecture|architecture|reaction-diffusion|formulation|algorithm|system\s+design|implementation|training\s+data|deep\s+residual\s+learning)\b",
+                r"\b(?:method(?:ology)?|methods|proposed\s+(?:method|model|approach|architecture|system)|model\s+architecture|architecture|reaction-diffusion|formulation|algorithm|system\s+design|implementation|training|deep\s+residual\s+learning)\b",
                 re.IGNORECASE,
             ),
         ),
