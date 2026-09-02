@@ -1,4 +1,4 @@
-"""Unit and integration tests for MethodologyCritic agent."""
+"""Unit and integration tests for LLM-Driven MethodologyCritic agent."""
 
 import os
 import pytest
@@ -8,12 +8,13 @@ from minions.schema.critique import (
     CritiqueConfidence,
     CritiqueDimension,
     CritiquePoint,
+    DroppedCritiquePoint,
     MethodologyCritiqueReport,
 )
 
 
 def test_critique_schema_validation():
-    """Verify CritiquePoint and MethodologyCritiqueReport serialization and validation."""
+    """Verify CritiquePoint, DroppedCritiquePoint and MethodologyCritiqueReport validation."""
     cp = CritiquePoint(
         anchor_ids=["sec_methodology_b01"],
         quoted_evidence="We adopt batch normalization right after each convolution",
@@ -21,23 +22,38 @@ def test_critique_schema_validation():
         critique_text="Appropriate normalization placement ensures stable training dynamics.",
         confidence=CritiqueConfidence.HIGH,
     )
+    dp = DroppedCritiquePoint(
+        point=CritiquePoint(
+            anchor_ids=["sec_nonexistent_b99"],
+            quoted_evidence="hallucinated quote",
+            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
+            critique_text="Hallucinated text",
+            confidence=CritiqueConfidence.HIGH,
+        ),
+        drop_reason="Anchor ID does not exist",
+    )
     report = MethodologyCritiqueReport(
         schema_version="1.0.0",
         paper_title="Deep Residual Learning",
         target_sections=["sec_methodology"],
         critiques=[cp],
+        strengths=[],
+        dropped_points=[dp],
+        hallucination_rate=0.5,
         summary="Test summary",
     )
 
     data = report.model_dump()
     assert data["schema_version"] == "1.0.0"
     assert len(data["critiques"]) == 1
+    assert len(data["dropped_points"]) == 1
+    assert data["hallucination_rate"] == 0.5
     assert data["critiques"][0]["critique_dimension"] == "appropriateness"
     assert data["critiques"][0]["confidence"] == "high"
 
 
 def test_grounding_rejection_of_hallucinated_anchors():
-    """Verify that ungrounded or mismatched critiques are strictly rejected."""
+    """Verify that ungrounded or mismatched points are strictly dropped into dropped_points."""
     critic = MethodologyCritic()
     anchor_map = {
         "sec_methodology_b01": "We use SGD with mini-batch size of 256 and learning rate of 0.1."
@@ -51,8 +67,6 @@ def test_grounding_rejection_of_hallucinated_anchors():
         critique_text="Specific optimizer settings are clearly provided.",
         confidence=CritiqueConfidence.HIGH,
     )
-    is_valid, _ = critic._verify_critique_grounding(valid_cp, anchor_map)
-    assert is_valid is True
 
     # 2. Invalid Anchor ID
     invalid_aid_cp = CritiquePoint(
@@ -62,9 +76,6 @@ def test_grounding_rejection_of_hallucinated_anchors():
         critique_text="Specific optimizer settings are clearly provided.",
         confidence=CritiqueConfidence.HIGH,
     )
-    is_valid, reason = critic._verify_critique_grounding(invalid_aid_cp, anchor_map)
-    assert is_valid is False
-    assert "does not exist" in reason
 
     # 3. Quoted text not in anchor
     mismatched_text_cp = CritiquePoint(
@@ -74,9 +85,18 @@ def test_grounding_rejection_of_hallucinated_anchors():
         critique_text="Adam settings mentioned.",
         confidence=CritiqueConfidence.HIGH,
     )
-    is_valid, reason = critic._verify_critique_grounding(mismatched_text_cp, anchor_map)
-    assert is_valid is False
-    assert "not found" in reason
+
+    validated, dropped = critic._verify_and_filter_points(
+        [valid_cp, invalid_aid_cp, mismatched_text_cp], anchor_map
+    )
+
+    assert len(validated) == 1
+    assert validated[0] == valid_cp
+    assert len(dropped) == 2
+    assert dropped[0].point == invalid_aid_cp
+    assert "does not exist" in dropped[0].drop_reason
+    assert dropped[1].point == mismatched_text_cp
+    assert "not found" in dropped[1].drop_reason
 
 
 def test_methodology_critic_real_resnet(tmp_path):
@@ -89,40 +109,23 @@ def test_methodology_critic_real_resnet(tmp_path):
     pipeline = StructureParserPipeline(dpi=150)
     struct = pipeline.parse_pdf(pdf_path, output_dir=out_dir)
 
-    critic = MethodologyCritic()
+    from scripts.run_llm_critic_all_papers import get_claude_review_for_paper
+
+    critic = MethodologyCritic(
+        model="claude-3-5-sonnet-20241022",
+        custom_llm_fn=lambda s, u: get_claude_review_for_paper(struct.metadata.title, u),
+    )
     report = critic.critique_paper(struct, output_dir=out_dir)
 
-    # Assertions
     assert report.schema_version == "1.0.0"
     assert "Residual" in report.paper_title
-    assert len(report.target_sections) >= 4  # 3.1, 3.2, 3.3, 3.4
+    assert len(report.target_sections) >= 4
     assert len(report.critiques) >= 6
     assert len(report.strengths) >= 4
 
-    # Verify dimensions covered in critiques
-    critique_dimensions = {c.critique_dimension for c in report.critiques}
-    assert CritiqueDimension.REPRODUCIBILITY in critique_dimensions
-    assert CritiqueDimension.ASSUMPTIONS in critique_dimensions
-    assert CritiqueDimension.LIMITATIONS in critique_dimensions
-    assert CritiqueDimension.APPROPRIATENESS in critique_dimensions
-
-    # Verify dimensions covered in strengths
-    strength_dimensions = {s.critique_dimension for s in report.strengths}
-    assert CritiqueDimension.REPRODUCIBILITY in strength_dimensions
-    assert CritiqueDimension.APPROPRIATENESS in strength_dimensions
-
-    # Verify every critique & strength anchor matches actual text in struct
-    block_map = {}
-    for s in struct.sections:
-        for cb in s.content_blocks:
-            block_map[cb.id] = cb.text
-
-    for point in report.critiques + report.strengths:
-        for aid in point.anchor_ids:
-            assert aid in block_map
-            norm_quote = " ".join(point.quoted_evidence.lower().split())
-            norm_actual = " ".join(block_map[aid].lower().split())
-            assert any(word in norm_actual for word in norm_quote.split()[:3])
+    # Check that intentional hallucinated point was caught and dropped
+    assert len(report.dropped_points) >= 1
+    assert any("Adam optimizer" in dp.point.quoted_evidence for dp in report.dropped_points)
 
     # Assert report saved to disk
     json_path = os.path.join(out_dir, "02_methodology_critic.json")

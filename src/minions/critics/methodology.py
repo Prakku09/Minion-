@@ -1,32 +1,70 @@
-"""Methodology Critic Agent evaluating reproducibility, assumptions, limitations, and appropriateness.
+"""LLM-Driven Methodology Critic Agent.
 
-Strictly separates genuine methodological gaps/risks (critiques) from confirmatory/rigorous points (strengths).
+Evaluates scientific paper methodology sections against structured criteria:
+- Reproducibility
+- Stated Assumptions
+- Acknowledged Limitations
+- Method Appropriateness
+
+Enforces strict post-hoc grounding verification against parsed anchor blocks.
 """
 
 import json
+import logging
 import os
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from minions.schema.critique import (
     CritiqueConfidence,
     CritiqueDimension,
     CritiquePoint,
+    DroppedCritiquePoint,
     MethodologyCritiqueReport,
 )
 from minions.schema.paper import CanonicalSectionType, PaperStructure, Section
 
+logger = logging.getLogger(__name__)
+
 
 class MethodologyCritic:
-    """Evaluates paper methodology sections against structured scientific criteria."""
+    """LLM-driven critic evaluating methodology sections with deterministic post-hoc quote grounding."""
 
-    def __init__(self):
-        pass
+    def __init__(
+        self,
+        model: str = "claude-3-5-sonnet-20241022",
+        provider: Optional[str] = None,
+        api_key: Optional[str] = None,
+        custom_llm_fn: Optional[Callable[[str, str], str]] = None,
+    ):
+        """Initialize Methodology Critic.
+
+        Args:
+            model: Model identifier (e.g. 'claude-3-5-sonnet-20241022', 'gpt-4o', 'gemini-2.0-flash').
+            provider: 'anthropic', 'openai', 'gemini', or None (auto-detected).
+            api_key: API key for the chosen provider.
+            custom_llm_fn: Optional custom callable (system_prompt, user_prompt) -> response_text.
+        """
+        self.model = model
+        self.provider = provider or self._detect_provider(model)
+        self.api_key = api_key
+        self.custom_llm_fn = custom_llm_fn
+
+    def _detect_provider(self, model: str) -> str:
+        """Infer provider from model name."""
+        m = model.lower()
+        if "claude" in m:
+            return "anthropic"
+        if "gpt" in m or "o1" in m or "o3" in m:
+            return "openai"
+        if "gemini" in m:
+            return "gemini"
+        return "anthropic"
 
     def critique_paper(
         self, paper: PaperStructure, output_dir: Optional[str] = None
     ) -> MethodologyCritiqueReport:
-        """Run full methodology critique on a parsed PaperStructure."""
+        """Run full LLM-driven methodology critique and post-hoc grounding verification."""
         # 1. Build anchor text lookup index
         anchor_map: Dict[str, str] = self._build_anchor_index(paper)
 
@@ -42,40 +80,47 @@ class MethodologyCritic:
                 target_sections=[],
                 critiques=[],
                 strengths=[],
+                dropped_points=[],
+                hallucination_rate=0.0,
                 summary="No methodology sections found in the parsed document structure.",
             )
 
-        # 3. Generate candidate critiques (gaps/risks/ambiguities) and strengths (confirmatory/well-specified)
-        raw_critiques, raw_strengths = self._evaluate_methodology_dimensions(
-            methodology_sections, paper, anchor_map
+        # 3. Compile structured prompt for the LLM
+        system_prompt, user_prompt = self._build_prompts(paper, methodology_sections)
+
+        # 4. Generate candidate critiques and strengths via LLM
+        raw_response = self._call_llm(system_prompt, user_prompt)
+        raw_critiques, raw_strengths = self._parse_llm_json(raw_response)
+
+        # 5. Post-Hoc Grounding Verification: Verify quoted evidence exists verbatim at cited anchor
+        validated_critiques, dropped_critiques = self._verify_and_filter_points(
+            raw_critiques, anchor_map
+        )
+        validated_strengths, dropped_strengths = self._verify_and_filter_points(
+            raw_strengths, anchor_map
         )
 
-        # 4. Strict Grounding Validation: verify that quoted text exists at cited anchor
-        validated_critiques: List[CritiquePoint] = []
-        for cp in raw_critiques:
-            is_valid, _ = self._verify_critique_grounding(cp, anchor_map)
-            if is_valid:
-                validated_critiques.append(cp)
+        all_dropped = dropped_critiques + dropped_strengths
+        total_generated = len(raw_critiques) + len(raw_strengths)
+        hallucination_rate = (
+            round(len(all_dropped) / total_generated, 4) if total_generated > 0 else 0.0
+        )
 
-        validated_strengths: List[CritiquePoint] = []
-        for sp in raw_strengths:
-            is_valid, _ = self._verify_critique_grounding(sp, anchor_map)
-            if is_valid:
-                validated_strengths.append(sp)
-
-        # 5. Build Final Report
+        # 6. Build Final Report
         report = MethodologyCritiqueReport(
             schema_version="1.0.0",
             paper_title=paper.metadata.title,
             target_sections=target_section_ids,
             critiques=validated_critiques,
             strengths=validated_strengths,
+            dropped_points=all_dropped,
+            hallucination_rate=hallucination_rate,
             summary=self._generate_synthesis_summary(
-                validated_critiques, validated_strengths, target_section_ids
+                validated_critiques, validated_strengths, all_dropped, target_section_ids
             ),
         )
 
-        # 6. Save JSON artifact if output directory specified
+        # 7. Save JSON artifact if output directory specified
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
             report_path = os.path.join(output_dir, "02_methodology_critic.json")
@@ -106,10 +151,225 @@ class MethodologyCritic:
 
         return index
 
+    def _build_prompts(
+        self, paper: PaperStructure, methodology_sections: List[Section]
+    ) -> Tuple[str, str]:
+        """Build prompt containing rubric instructions and formatted methodology block catalog."""
+        system_prompt = (
+            "You are an expert scientific peer reviewer conducting a rigorous methodology review of a research paper.\n\n"
+            "### EVALUATION RUBRIC:\n"
+            "Analyze the provided methodology text and bound assets across four core dimensions:\n"
+            "1. REPRODUCIBILITY: Are steps, formulas, parameters, hyperparameters, datasets, and evaluation protocols described with sufficient precision to reproduce?\n"
+            "2. STATED ASSUMPTIONS: Are key theoretical premises, inductive priors, asymptotic approximations, and baseline isolation controls made explicit or left implicit?\n"
+            "3. ACKNOWLEDGED LIMITATIONS: Does the methodology address its own architectural bounds, single-layer constraints, open theoretical questions, or domain constraints?\n"
+            "4. METHOD APPROPRIATENESS: Is the chosen mathematical/architectural formulation suited to the stated problem without introducing confounding variables?\n\n"
+            "### CRITICAL SEPARATION RULE:\n"
+            "- 'critiques': ONLY emit a point if it identifies a genuine gap, ambiguity, unjustified choice, unproven assumption, or risk. Do NOT emit a critique that merely confirms quality.\n"
+            "- 'strengths': ONLY emit confirmatory and rigorous observations where the methodology is explicitly well-specified, well-controlled, or structurally sound.\n\n"
+            "### GROUNDING MANDATE:\n"
+            "- Every point in both arrays MUST cite the exact anchor ID(s) (e.g. ['sec_methodology_4_1_..._b02']) from the document catalog.\n"
+            "- Every point MUST provide 'quoted_evidence' as a short, EXACT verbatim quote copied directly from the cited anchor block text.\n"
+            "- If evidence is ambiguous, set confidence to 'medium' or 'low'. Otherwise 'high'.\n\n"
+            "### OUTPUT JSON FORMAT:\n"
+            "You MUST respond ONLY with a valid JSON object with the following structure:\n"
+            "{\n"
+            '  "critiques": [\n'
+            "    {\n"
+            '      "anchor_ids": ["anchor_id"],\n'
+            '      "quoted_evidence": "exact verbatim quote from block",\n'
+            '      "critique_dimension": "reproducibility|assumptions|limitations|appropriateness",\n'
+            '      "critique_text": "description of gap/risk/unjustified choice",\n'
+            '      "confidence": "high|medium|low"\n'
+            "    }\n"
+            "  ],\n"
+            '  "strengths": [\n'
+            "    {\n"
+            '      "anchor_ids": ["anchor_id"],\n'
+            '      "quoted_evidence": "exact verbatim quote from block",\n'
+            '      "critique_dimension": "reproducibility|assumptions|limitations|appropriateness",\n'
+            '      "critique_text": "description of well-specified strength",\n'
+            '      "confidence": "high|medium|low"\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+
+        # Build Document Catalog
+        catalog_lines = [
+            f"PAPER TITLE: {paper.metadata.title}",
+            f"METHODOLOGY SECTIONS COUNT: {len(methodology_sections)}",
+            "\n=== DOCUMENT METHODOLOGY BLOCK CATALOG ===",
+        ]
+
+        for s in methodology_sections:
+            catalog_lines.append(f"\nSECTION: [{s.id}] {s.heading_title} (Level {s.level})")
+            if s.figure_ids:
+                catalog_lines.append(f"  Bound Figures: {s.figure_ids}")
+            if s.table_ids:
+                catalog_lines.append(f"  Bound Tables: {s.table_ids}")
+            if s.equation_ids:
+                catalog_lines.append(f"  Bound Equations: {s.equation_ids}")
+
+            for cb in s.content_blocks:
+                text_clean = cb.text.strip().replace("\n", " ")
+                catalog_lines.append(f"  [{cb.id}] (Page {cb.page_number}): \"{text_clean}\"")
+
+        # Include referenced figures/tables/equations text
+        catalog_lines.append("\n=== BOUND ASSETS CATALOG ===")
+        all_fig_ids = set(f for s in methodology_sections for f in s.figure_ids)
+        all_tab_ids = set(t for s in methodology_sections for t in s.table_ids)
+        all_eq_ids = set(e for s in methodology_sections for e in s.equation_ids)
+
+        for fid in sorted(all_fig_ids):
+            if fid in paper.figures:
+                fig = paper.figures[fid]
+                catalog_lines.append(f"  [{fid}] Caption: \"{fig.caption}\"")
+        for tid in sorted(all_tab_ids):
+            if tid in paper.tables:
+                tab = paper.tables[tid]
+                catalog_lines.append(f"  [{tid}] Caption: \"{tab.caption}\" | Markdown: \"{tab.markdown_content}\"")
+        for eid in sorted(all_eq_ids):
+            if eid in paper.equations:
+                eq = paper.equations[eid]
+                catalog_lines.append(f"  [{eid}] Raw: \"{eq.raw_text}\" | LaTeX: \"{eq.latex}\"")
+
+        user_prompt = "\n".join(catalog_lines)
+        return system_prompt, user_prompt
+
+    def _call_llm(self, system_prompt: str, user_prompt: str) -> str:
+        """Execute LLM call using configured provider or custom function."""
+        if self.custom_llm_fn is not None:
+            return self.custom_llm_fn(system_prompt, user_prompt)
+
+        provider = self.provider.lower()
+
+        # 1. Anthropic (Claude)
+        if provider == "anthropic":
+            try:
+                import anthropic
+
+                api_key = self.api_key or os.environ.get("ANTHROPIC_API_KEY")
+                client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+                response = client.messages.create(
+                    model=self.model if "claude" in self.model else "claude-3-5-sonnet-20241022",
+                    max_tokens=4000,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                )
+                return response.content[0].text
+            except Exception as e:
+                logger.warning(f"Anthropic API call failed ({e}). Checking alternative providers...")
+
+        # 2. OpenAI
+        if provider == "openai" or os.environ.get("OPENAI_API_KEY"):
+            try:
+                import openai
+
+                api_key = self.api_key or os.environ.get("OPENAI_API_KEY")
+                client = openai.OpenAI(api_key=api_key)
+                response = client.chat.completions.create(
+                    model=self.model if "gpt" in self.model else "gpt-4o",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.warning(f"OpenAI API call failed ({e})...")
+
+        # 3. Google GenAI (Gemini)
+        if provider == "gemini" or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
+            try:
+                from google import genai
+
+                api_key = self.api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model=self.model if "gemini" in self.model else "gemini-2.0-flash",
+                    contents=f"{system_prompt}\n\n{user_prompt}",
+                )
+                return response.text
+            except Exception as e:
+                logger.warning(f"Google GenAI API call failed ({e})...")
+
+        raise RuntimeError(
+            "No LLM API key available (checked ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). "
+            "Please provide an API key or a custom_llm_fn."
+        )
+
+    def _parse_llm_json(
+        self, raw_text: str
+    ) -> Tuple[List[CritiquePoint], List[CritiquePoint]]:
+        """Parse raw LLM response text into candidate CritiquePoint lists."""
+        # Extract JSON block if wrapped in markdown fences
+        json_str = raw_text.strip()
+        if "```json" in json_str:
+            json_str = json_str.split("```json", 1)[1].split("```", 1)[0].strip()
+        elif "```" in json_str:
+            json_str = json_str.split("```", 1)[1].split("```", 1)[0].strip()
+
+        try:
+            data = json.loads(json_str)
+        except Exception as e:
+            logger.error(f"Failed to parse LLM JSON output: {e}\nRaw output:\n{raw_text}")
+            return [], []
+
+        critiques_data = data.get("critiques", [])
+        strengths_data = data.get("strengths", [])
+
+        critiques: List[CritiquePoint] = []
+        for item in critiques_data:
+            try:
+                cp = CritiquePoint(
+                    anchor_ids=item["anchor_ids"],
+                    quoted_evidence=item["quoted_evidence"],
+                    critique_dimension=CritiqueDimension(item["critique_dimension"].lower()),
+                    critique_text=item["critique_text"],
+                    confidence=CritiqueConfidence(item.get("confidence", "high").lower()),
+                )
+                critiques.append(cp)
+            except Exception as e:
+                logger.warning(f"Skipping malformed critique object: {e}")
+
+        strengths: List[CritiquePoint] = []
+        for item in strengths_data:
+            try:
+                sp = CritiquePoint(
+                    anchor_ids=item["anchor_ids"],
+                    quoted_evidence=item["quoted_evidence"],
+                    critique_dimension=CritiqueDimension(item["critique_dimension"].lower()),
+                    critique_text=item["critique_text"],
+                    confidence=CritiqueConfidence(item.get("confidence", "high").lower()),
+                )
+                strengths.append(sp)
+            except Exception as e:
+                logger.warning(f"Skipping malformed strength object: {e}")
+
+        return critiques, strengths
+
+    def _verify_and_filter_points(
+        self, points: List[CritiquePoint], anchor_map: Dict[str, str]
+    ) -> Tuple[List[CritiquePoint], List[DroppedCritiquePoint]]:
+        """Strictly verify each point against anchor store, dropping ungrounded or hallucinated points."""
+        validated: List[CritiquePoint] = []
+        dropped: List[DroppedCritiquePoint] = []
+
+        for p in points:
+            is_valid, reason = self._verify_critique_grounding(p, anchor_map)
+            if is_valid:
+                validated.append(p)
+            else:
+                dropped.append(DroppedCritiquePoint(point=p, drop_reason=reason))
+
+        return validated, dropped
+
     def _verify_critique_grounding(
         self, critique: CritiquePoint, anchor_map: Dict[str, str]
     ) -> Tuple[bool, str]:
-        """Strictly verify that every cited anchor exists and quoted_evidence is an exact substring."""
+        """Strictly verify that cited anchor exists and quoted_evidence is an exact substring."""
         if not critique.anchor_ids:
             return False, "Critique has no cited anchor IDs."
 
@@ -117,296 +377,33 @@ class MethodologyCritic:
             if aid not in anchor_map:
                 return False, f"Cited anchor ID '{aid}' does not exist in document index."
 
-            stored_text = re.sub(r"\s+", " ", anchor_map[aid]).strip()
-            quoted_text = re.sub(r"\s+", " ", critique.quoted_evidence).strip()
+            stored_text = re.sub(r"\s+", " ", anchor_map[aid]).strip().lower()
+            quoted_text = re.sub(r"\s+", " ", critique.quoted_evidence).strip().lower()
 
-            if quoted_text.lower() not in stored_text.lower():
-                quote_words = quoted_text.split()
-                if len(quote_words) >= 4:
-                    sub_quote = " ".join(quote_words[:4]).lower()
-                    if sub_quote not in stored_text.lower():
-                        return False, f"Quoted evidence not found in anchor '{aid}' text."
-                else:
-                    return False, f"Quoted evidence not found in anchor '{aid}' text."
+            if not quoted_text:
+                return False, f"Quoted evidence is empty for anchor '{aid}'."
+
+            # Exact normalized substring match
+            if quoted_text in stored_text:
+                continue
+
+            # Fallback: check prefix 5 words
+            quote_words = quoted_text.split()
+            if len(quote_words) >= 4:
+                sub_quote = " ".join(quote_words[:4])
+                if sub_quote in stored_text:
+                    continue
+                return False, f"Quoted evidence '{quoted_text[:40]}...' not found in anchor '{aid}' text."
+            else:
+                return False, f"Quoted evidence '{quoted_text}' not found in anchor '{aid}' text."
 
         return True, "Valid"
-
-    # =========================================================================
-    # CORE METHODOLOGY EVALUATION ENGINE
-    # =========================================================================
-    def _evaluate_methodology_dimensions(
-        self,
-        sections: List[Section],
-        paper: PaperStructure,
-        anchor_map: Dict[str, str],
-    ) -> Tuple[List[CritiquePoint], List[CritiquePoint]]:
-        """Analyze methodology content blocks, emitting genuine critiques vs. strengths."""
-        critiques: List[CritiquePoint] = []
-        strengths: List[CritiquePoint] = []
-
-        for sec in sections:
-            for cb in sec.content_blocks:
-                text = cb.text
-
-                # -------------------------------------------------------------
-                # 1. REPRODUCIBILITY EVALUATION
-                # -------------------------------------------------------------
-                # Critique: Ambiguity in learning rate plateau decay trigger
-                if re.search(r"divided\s+by\s+10\s+when\s+the\s+error\s+plateaus", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"divided by 10 when the error plateaus")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
-                            critique_text=(
-                                "The learning rate decay schedule specifies dividing by 10 'when the error plateaus', "
-                                "but omits the quantitative patience criterion or validation loss tolerance threshold, "
-                                "introducing ambiguity for exact automated reproduction of training curves."
-                            ),
-                            confidence=CritiqueConfidence.MEDIUM,
-                        )
-                    )
-
-                # Critique: Evaluation confounding (test-time multi-crop/multi-scale tricks mixed with core method)
-                if re.search(r"10-crop\s+testing", text, re.I) and re.search(r"multiple\s+scales", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"(?:10-crop testing|multiple scales)")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
-                            critique_text=(
-                                "The methodology couples core model evaluation with extensive test-time enhancement tricks "
-                                "(standard 10-crop testing combined with 5-scale score averaging: {224, 256, 384, 480, 640}). "
-                                "This creates potential confounding between architectural residual gains and heavy test-time ensemble boosts."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Explicit, complete optimization hyperparameter recipe
-                if re.search(r"\bSGD\b", text) and "mini-batch size of 256" in text and "weight decay of 0.0001" in text:
-                    quote = self._extract_matching_sentence(text, r"SGD with a mini-batch size")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
-                            critique_text=(
-                                "Optimization hyperparameters are comprehensively specified with exact numeric values: "
-                                "SGD optimizer, mini-batch size 256, initial lr 0.1, momentum 0.9, weight decay 0.0001, "
-                                "and maximum iteration budget (60 x 10^4 iterations)."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Explicit data preprocessing and scale augmentation pipeline
-                if "shorter side randomly sampled in [256" in text and "224 × 224 crop" in text:
-                    quote = self._extract_matching_sentence(text, r"shorter side randomly sampled")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
-                            critique_text=(
-                                "Data preprocessing and augmentation pipeline is explicitly reproducible: "
-                                "random scale sampling in [256, 480], 224x224 crop with horizontal flip, and per-pixel mean subtraction."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Delineation of spatial & channel dimension-matching options
-                if "dimension" in text.lower() and ("zero entries padded" in text.lower() or "projection shortcut" in text.lower()):
-                    quote = self._extract_matching_sentence(text, r"(?:zero entries padded|projection shortcut)")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.REPRODUCIBILITY,
-                            critique_text=(
-                                "Architecture specification details two explicit downsampling options: Option A (zero-padding identity) "
-                                "and Option B (1x1 projection convolutions with stride 2), providing concrete structural clarity."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # -------------------------------------------------------------
-                # 2. ASSUMPTIONS EVALUATION
-                # -------------------------------------------------------------
-                # Critique: Unproven heuristic preconditioning assumption
-                if re.search(r"closer\s+to\s+an\s+identity\s+mapping\s+than\s+to\s+a\s+zero\s+mapping", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"closer\s+to\s+an\s+identity\s+mapping")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.ASSUMPTIONS,
-                            critique_text=(
-                                "The central motivation assumes that the target optimal mapping is closer to an identity mapping "
-                                "than to a zero mapping, asserting that learning reference perturbations is inherently easier. "
-                                "While empirically successful, this is an unproven inductive prior without formal optimization bounds."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Critique: Asymptotic functional equivalence vs. finite-depth gradient optimization
-                if re.search(r"hypothesi[zs]e[s]?\s+that\s+multiple\s+nonlinear\s+layers\s+can\s+asymptotically\s+approximate", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"hypothesi[zs]e[s]?\s+that\s+multiple\s+nonlinear\s+layers")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.ASSUMPTIONS,
-                            critique_text=(
-                                "The formulation relies on asymptotic universal approximation equivalence to justify learning H(x) - x "
-                                "rather than H(x). However, asymptotic representation capacity does not guarantee finite-depth "
-                                "gradient trainability, leaving the convergence mechanism as an empirical assumption."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Controlled parameter/FLOP parity baseline assumption
-                if "neither extra parameter nor computation complexity" in text.lower():
-                    quote = self._extract_matching_sentence(text, r"neither extra parameter nor computation complexity")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.ASSUMPTIONS,
-                            critique_text=(
-                                "Methodology explicitly guarantees a controlled baseline comparison: identity shortcuts introduce "
-                                "zero additional parameters and negligible computation, isolating depth trainability from parameter scaling."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # -------------------------------------------------------------
-                # 3. LIMITATIONS EVALUATION
-                # -------------------------------------------------------------
-                # Critique: Structural inability to apply residual connections to isolated single layers
-                if re.search(r"if\s+F\s+has\s+only\s+a\s+single\s+layer.*not\s+observed\s+advantages", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"if\s+F\s+has\s+only\s+a\s+single\s+layer")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.LIMITATIONS,
-                            critique_text=(
-                                "The methodology acknowledges an architectural lower bound: single-layer residual blocks (y = W1*x + x) "
-                                "provide no observable advantages over standard linear mappings. The residual mechanism is strictly "
-                                "constrained to multi-layer units (>= 2 layers), preventing single-layer skip integration."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Critique: Theoretical representation power left as open question
-                if re.search(r"hypothesis.*still\s+an\s+open\s+question", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"still\s+an\s+open\s+question")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.LIMITATIONS,
-                            critique_text=(
-                                "The authors explicitly concede that the theoretical representation capacity of residual learning "
-                                "remains an open research question, documenting the lack of formal mathematical guarantees."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Critique: Zero-padding trade-off leaving expanded channels un-projected
-                if "extra zero entries padded for increasing dimensions" in text.lower() and "introduces no extra parameter" in text.lower():
-                    quote = self._extract_matching_sentence(text, r"extra zero entries padded")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.LIMITATIONS,
-                            critique_text=(
-                                "While Option A (zero-padding identity shortcuts) avoids introducing parameters during downsampling, "
-                                "it leaves newly added channel dimensions un-projected and incapable of residual signal transmission "
-                                "across spatial transitions."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # -------------------------------------------------------------
-                # 4. APPROPRIATENESS EVALUATION
-                # -------------------------------------------------------------
-                # Critique: Post-addition ReLU restricts skip pathway activations to non-negative domain
-                if "second nonlinearity after the addition" in text.lower():
-                    quote = self._extract_matching_sentence(text, r"second\s+nonlinearity\s+after\s+the\s+addition")
-                    critiques.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.APPROPRIATENESS,
-                            critique_text=(
-                                "Applying the final ReLU activation after element-wise addition (sigma(F(x) + x)) forces all shortcut "
-                                "outputs into non-negative values. This impedes clean identity propagation of negative activations "
-                                "across consecutive residual units."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Mathematical formulation directly suited to prevent degradation
-                if "motivated by the counterintuitive phenomena about the degradation problem" in text.lower():
-                    quote = self._extract_matching_sentence(text, r"motivated\s+by\s+the\s+counterintuitive\s+phenomena")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.APPROPRIATENESS,
-                            critique_text=(
-                                "The residual reformulation y = F(x) + x is directly tailored to solve the optimization degradation problem: "
-                                "by re-framing stacked layers to fit residual mappings, solvers can naturally learn identity mappings "
-                                "by driving weights toward zero, ensuring deeper networks do not incur higher training error."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-                # Strength: Batch Normalization placement ensuring gradient variance stability
-                if re.search(r"batch\s+normalization\s+\(BN\)\s+\[16\]\s+right\s+after\s+each\s+convolution\s+and\s+before\s+activation", text, re.I):
-                    quote = self._extract_matching_sentence(text, r"batch\s+normalization\s+\(BN\)")
-                    strengths.append(
-                        CritiquePoint(
-                            anchor_ids=[cb.id],
-                            quoted_evidence=quote,
-                            critique_dimension=CritiqueDimension.APPROPRIATENESS,
-                            critique_text=(
-                                "Placing Batch Normalization right after each convolution and before activation is soundly justified, "
-                                "preventing internal covariate shift and ensuring forward/backward signal propagation across deep networks."
-                            ),
-                            confidence=CritiqueConfidence.HIGH,
-                        )
-                    )
-
-        return critiques, strengths
-
-    def _extract_matching_sentence(self, block_text: str, regex_pattern: str) -> str:
-        """Extract the exact sentence in block_text containing the pattern for clean evidence quoting."""
-        sentences = re.split(r"(?<=[.!?])\s+", block_text)
-        for s in sentences:
-            if re.search(regex_pattern, s, re.I):
-                return s.strip()
-        return block_text[:180].strip()
 
     def _generate_synthesis_summary(
         self,
         critiques: List[CritiquePoint],
         strengths: List[CritiquePoint],
+        dropped: List[DroppedCritiquePoint],
         target_sections: List[str],
     ) -> str:
         """Generate high-level synthesis of methodological findings."""
@@ -422,10 +419,13 @@ class MethodologyCritic:
                 strength_dims.get(sp.critique_dimension.value, 0) + 1
             )
 
+        total_gen = len(critiques) + len(strengths) + len(dropped)
+        hallucination_pct = f"{round(len(dropped) / total_gen * 100, 1)}%" if total_gen > 0 else "0.0%"
+
         summary_lines = [
-            f"Methodology evaluation across {len(target_sections)} sections identified {len(critiques)} material critique points (gaps/risks/ambiguities) and {len(strengths)} methodological strengths.",
+            f"Methodology evaluation across {len(target_sections)} sections produced {len(critiques)} verified material critiques and {len(strengths)} verified strengths.",
             f"Critique breakdown: {critique_dims.get('reproducibility', 0)} reproducibility gaps, {critique_dims.get('assumptions', 0)} unproven assumptions, {critique_dims.get('limitations', 0)} architectural constraints, and {critique_dims.get('appropriateness', 0)} design risks.",
             f"Strength breakdown: {strength_dims.get('reproducibility', 0)} reproducibility specs, {strength_dims.get('assumptions', 0)} baseline controls, and {strength_dims.get('appropriateness', 0)} design strengths.",
-            "All points are 100% grounded in verbatim document quotes with deterministic anchor IDs.",
+            f"Post-hoc grounding dropped {len(dropped)} hallucinated/mismatched points (hallucination rate: {hallucination_pct}).",
         ]
         return " ".join(summary_lines)

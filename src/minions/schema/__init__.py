@@ -18,6 +18,7 @@ from minions.schema.critique import (
     CritiqueConfidence,
     CritiqueDimension,
     CritiquePoint,
+    DroppedCritiquePoint,
     MethodologyCritiqueReport,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "CritiqueConfidence",
     "CritiqueDimension",
     "CritiquePoint",
+    "DroppedCritiquePoint",
     "MethodologyCritiqueReport",
 ]

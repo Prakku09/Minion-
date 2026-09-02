@@ -45,6 +45,15 @@ class CritiquePoint(BaseModel):
     )
 
 
+class DroppedCritiquePoint(BaseModel):
+    """A candidate point dropped during post-hoc grounding verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    point: CritiquePoint = Field(..., description="The candidate point that was rejected.")
+    drop_reason: str = Field(..., description="The exact reason verification failed.")
+
+
 class MethodologyCritiqueReport(BaseModel):
     """Complete structured critique report for Methodology sections."""
 
@@ -65,6 +74,14 @@ class MethodologyCritiqueReport(BaseModel):
     strengths: List[CritiquePoint] = Field(
         default_factory=list,
         description="List of evidence-grounded strength and confirmatory observations where methodology is well-specified or rigorous.",
+    )
+    dropped_points: List[DroppedCritiquePoint] = Field(
+        default_factory=list,
+        description="List of candidate points dropped due to failed post-hoc grounding verification.",
+    )
+    hallucination_rate: float = Field(
+        default=0.0,
+        description="Fraction of candidate points dropped by verification (0.0 to 1.0).",
     )
     summary: Optional[str] = Field(
         default=None, description="High-level synthesis of methodological findings."
