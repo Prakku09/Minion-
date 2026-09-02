@@ -1,4 +1,4 @@
-"""Data schemas for Minions paper structure representation."""
+"""Schema definitions for Minions."""
 
 from minions.schema.paper import (
     CanonicalSectionType,
@@ -12,6 +12,13 @@ from minions.schema.paper import (
     Reference,
     Section,
     SectionParseConfidence,
+    Table,
+)
+from minions.schema.critique import (
+    CritiqueConfidence,
+    CritiqueDimension,
+    CritiquePoint,
+    MethodologyCritiqueReport,
 )
 
 __all__ = [
@@ -26,4 +33,9 @@ __all__ = [
     "Reference",
     "Section",
     "SectionParseConfidence",
+    "Table",
+    "CritiqueConfidence",
+    "CritiqueDimension",
+    "CritiquePoint",
+    "MethodologyCritiqueReport",
 ]
