@@ -96,28 +96,32 @@ def test_methodology_critic_real_resnet(tmp_path):
     assert report.schema_version == "1.0.0"
     assert "Residual" in report.paper_title
     assert len(report.target_sections) >= 4  # 3.1, 3.2, 3.3, 3.4
-    assert len(report.critiques) >= 8
+    assert len(report.critiques) >= 6
+    assert len(report.strengths) >= 4
 
-    # Verify dimensions covered
-    dimensions = {c.critique_dimension for c in report.critiques}
-    assert CritiqueDimension.REPRODUCIBILITY in dimensions
-    assert CritiqueDimension.ASSUMPTIONS in dimensions
-    assert CritiqueDimension.LIMITATIONS in dimensions
-    assert CritiqueDimension.APPROPRIATENESS in dimensions
+    # Verify dimensions covered in critiques
+    critique_dimensions = {c.critique_dimension for c in report.critiques}
+    assert CritiqueDimension.REPRODUCIBILITY in critique_dimensions
+    assert CritiqueDimension.ASSUMPTIONS in critique_dimensions
+    assert CritiqueDimension.LIMITATIONS in critique_dimensions
+    assert CritiqueDimension.APPROPRIATENESS in critique_dimensions
 
-    # Verify every critique anchor matches actual text in struct
+    # Verify dimensions covered in strengths
+    strength_dimensions = {s.critique_dimension for s in report.strengths}
+    assert CritiqueDimension.REPRODUCIBILITY in strength_dimensions
+    assert CritiqueDimension.APPROPRIATENESS in strength_dimensions
+
+    # Verify every critique & strength anchor matches actual text in struct
     block_map = {}
     for s in struct.sections:
         for cb in s.content_blocks:
             block_map[cb.id] = cb.text
 
-    for cp in report.critiques:
-        for aid in cp.anchor_ids:
+    for point in report.critiques + report.strengths:
+        for aid in point.anchor_ids:
             assert aid in block_map
-            # Verify quote is a case-insensitive normalized substring
-            norm_quote = " ".join(cp.quoted_evidence.lower().split())
+            norm_quote = " ".join(point.quoted_evidence.lower().split())
             norm_actual = " ".join(block_map[aid].lower().split())
-            # Check prefix words
             assert any(word in norm_actual for word in norm_quote.split()[:3])
 
     # Assert report saved to disk

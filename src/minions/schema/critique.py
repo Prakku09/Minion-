@@ -60,7 +60,11 @@ class MethodologyCritiqueReport(BaseModel):
     )
     critiques: List[CritiquePoint] = Field(
         default_factory=list,
-        description="List of evidence-grounded critique objects.",
+        description="List of evidence-grounded critique objects identifying genuine gaps, ambiguities, unjustified choices, or risks.",
+    )
+    strengths: List[CritiquePoint] = Field(
+        default_factory=list,
+        description="List of evidence-grounded strength and confirmatory observations where methodology is well-specified or rigorous.",
     )
     summary: Optional[str] = Field(
         default=None, description="High-level synthesis of methodological findings."
