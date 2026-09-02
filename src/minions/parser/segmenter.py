@@ -29,21 +29,21 @@ class SectionSegmenter:
         (
             CanonicalSectionType.RELATED_WORK,
             re.compile(
-                r"\b(?:related\s+work|prior\s+work|literature\s+review|state\s+of\s+the\s+art|background\s+and\s+related\s+work)\b",
+                r"\b(?:related\s+works?|prior\s+works?|literature\s+review|state\s+of\s+the\s+art|background\s+and\s+related\s+works?)\b",
                 re.IGNORECASE,
             ),
         ),
         (
             CanonicalSectionType.METHODOLOGY,
             re.compile(
-                r"\b(?:method(?:ology)?|methods|proposed|architecture|model|approach|formulation|algorithm|system\s+design|implementation|training|framework|adaptation|deep\s+residual|diffusion)\b",
+                r"\b(?:method(?:ology)?|methods|proposed\s+(?:method|model|approach|architecture)|model\s+architecture|architecture|reaction-diffusion|formulation|algorithm|system\s+design|implementation|training\s+data|deep\s+residual\s+learning)\b",
                 re.IGNORECASE,
             ),
         ),
         (
             CanonicalSectionType.RESULTS,
             re.compile(
-                r"\b(?:results?|experiments?|evaluation|ablation|empirical|benchmarks?|translation|classification)\b",
+                r"\b(?:results?|experiments?|evaluation|ablation|empirical\s+experiments?|benchmarks?|translation|classification)\b",
                 re.IGNORECASE,
             ),
         ),
@@ -57,7 +57,7 @@ class SectionSegmenter:
         (
             CanonicalSectionType.CONCLUSION,
             re.compile(
-                r"\b(?:conclusions?|concluding\s+remarks|summary\s+and\s+future\s+work|future\s+work)\b",
+                r"\b(?:conclusions?|concluding\s+remarks|summary\s+and\s+future\s+work|future\s+work|conclusion\s+and\s+future\s+work)\b",
                 re.IGNORECASE,
             ),
         ),
@@ -74,6 +74,13 @@ class SectionSegmenter:
                 re.IGNORECASE,
             ),
         ),
+    ]
+
+    # Strict patterns for unnumbered standalone major sections
+    UNNUMBERED_CANONICAL_PATTERNS = [
+        (CanonicalSectionType.ABSTRACT, re.compile(r"^\s*(?:abstract|summary)\s*$", re.IGNORECASE)),
+        (CanonicalSectionType.REFERENCES, re.compile(r"^\s*(?:references?|bibliography|literature\s+cited)\s*$", re.IGNORECASE)),
+        (CanonicalSectionType.APPENDIX, re.compile(r"^\s*(?:appendix|appendices|supplementary\s+material)\s*$", re.IGNORECASE)),
     ]
 
     # Numbered heading pattern e.g. "1 Introduction", "3.2 Model Architecture", "IV. EXPERIMENTS"
@@ -298,24 +305,13 @@ class SectionSegmenter:
         if norm_text.startswith(("Figure ", "Fig. ", "Table ", "Tab. ")):
             return False, CanonicalSectionType.OTHER, 1, ""
 
-        # Reject generic isolated words from table cells / diagrams without numbering
-        if norm_text.lower() in [
-            "model",
-            "method",
-            "methods",
-            "training data",
-            "test data",
-            "validation data",
-            "input",
-            "output",
-            "layer",
-            "loss",
-            "resolution",
-            "relative error (%)",
-        ]:
+        # Reject table cell content, running headers, and metric labels
+        if any(c in norm_text for c in ["&", "|", "#", "±", "%", "/", "@", "{", "}", "=", "<", ">", "\\"]):
+            return False, CanonicalSectionType.OTHER, 1, ""
+        if re.search(r"\b(?:flops|bleu|rouge|cider|nist|params?|acc\b|trainable|val\b|subspace\s+similarity)\b", norm_text, re.I):
             return False, CanonicalSectionType.OTHER, 1, ""
 
-        # Reject footnote narrative sentences starting with footnote numbers e.g. "4 We still need..."
+        # Reject footnote narrative sentences starting with numbers or letters
         if re.match(r"^\d+\s+[A-Z][a-z]+", norm_text) and len(norm_text.split()) > 7:
             return False, CanonicalSectionType.OTHER, 1, ""
 
@@ -325,14 +321,18 @@ class SectionSegmenter:
 
         # Match numbered section headings e.g. "1 Introduction", "3.2 Attention", "IV. Experiments"
         num_match = re.match(
-            r"^(?:(?:\d+(?:\.\d+)*\.?)|(?:[IVXLCDM]+\.?)|(?:[A-Z]\.))\s+([A-Za-z].*)$", norm_text
+            r"^(?:(?:\d+(?:\.\d+)*\.?)|(?:[IVXLCDM]+\.?)|(?:[A-Z]\.))\s+([A-Z].*)$", norm_text
         )
         if num_match:
             prefix = norm_text[: num_match.start(1)].strip().rstrip(".")
             heading_body = num_match.group(1).strip()
 
-            # Do not classify trailing sentence fragments as headings
+            # Heading body must start with an uppercase letter and not be a continuous narrative sentence
+            if not heading_body or not heading_body[0].isupper():
+                return False, CanonicalSectionType.OTHER, 1, ""
             if heading_body.endswith(".") and len(heading_body.split()) > 4 and not heading_body.endswith("etc."):
+                return False, CanonicalSectionType.OTHER, 1, ""
+            if re.search(r"\b(?:and the|is a|has a|was a|we use|we adopt|can be)\b", heading_body, re.I):
                 return False, CanonicalSectionType.OTHER, 1, ""
 
             dot_count = prefix.count(".")
@@ -343,12 +343,12 @@ class SectionSegmenter:
             STANDALONE_OVERRIDE_PATTERNS = [
                 (CanonicalSectionType.DISCUSSION, re.compile(r"^(?:limitations?|broader\s+impacts?|threats\s+to\s+validity)$", re.I)),
                 (CanonicalSectionType.CONCLUSION, re.compile(r"^(?:conclusions?|future\s+work)$", re.I)),
-                (CanonicalSectionType.RELATED_WORK, re.compile(r"^(?:related\s+work|prior\s+work)$", re.I)),
+                (CanonicalSectionType.RELATED_WORK, re.compile(r"^(?:related\s+works?|prior\s+works?)$", re.I)),
                 (CanonicalSectionType.APPENDIX, re.compile(r"^(?:appendix|supplementary(?:\s+material)?)$", re.I)),
             ]
 
             if level > 1:
-                # Subsection level > 1
+                # Subsection level > 1: inherit parent canonical type unless standalone override
                 if major_key in major_section_canonical:
                     override_c_type = None
                     for c_type, pat in STANDALONE_OVERRIDE_PATTERNS:
@@ -374,11 +374,10 @@ class SectionSegmenter:
 
             return True, matched_c_type, level, norm_text
 
-        # Match unnumbered prominent canonical headings (must be Title Case / ALL CAPS, e.g. 'Abstract', 'References')
-        for c_type, pattern in self.CANONICAL_PATTERNS:
-            if pattern.search(norm_text) and len(norm_text.split()) <= 4:
-                if norm_text.isupper() or norm_text.istitle() or any(w.istitle() for w in norm_text.split()):
-                    return True, c_type, 1, norm_text
+        # Match unnumbered standalone canonical headings (Strict: Abstract, References, Appendix only)
+        for c_type, pattern in self.UNNUMBERED_CANONICAL_PATTERNS:
+            if pattern.match(norm_text.strip()):
+                return True, c_type, 1, norm_text.strip()
 
         return False, CanonicalSectionType.OTHER, 1, ""
 
