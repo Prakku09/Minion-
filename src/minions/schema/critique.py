@@ -1,4 +1,12 @@
-"""Pydantic schemas for Critic agents."""
+"""Pydantic schemas for Critic agents.
+
+Grounding Contract:
+- 'Grounded' certifies that cited anchor IDs exist in the document index and that
+  `quoted_evidence` is an exact verbatim substring within the cited anchor block.
+- `critique_text` is the expert reviewer's analytical evaluation reacting to that
+  verified evidence, and may legitimately draw upon domain knowledge, theoretical
+  principles, or scientific standards beyond the quote itself.
+"""
 
 from enum import Enum
 from typing import List, Optional
@@ -19,17 +27,22 @@ class CritiqueConfidence(str, Enum):
 
 
 class CritiquePoint(BaseModel):
-    """A single evidence-grounded critique point."""
+    """A single evidence-grounded critique point.
+
+    Grounding Guarantee:
+    - `anchor_ids` and `quoted_evidence` are deterministically verified against the document text.
+    - `critique_text` contains domain reasoning, analytical critique, or evaluation reacting to the evidence.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     anchor_ids: List[str] = Field(
         ...,
-        description="Exact anchor ID(s) (e.g. sec_methodology_3_4_implementation_b01, eq_1) this critique is reacting to.",
+        description="Exact anchor ID(s) (e.g. sec_methodology_3_4_implementation_b01, eq_1) this critique is reacting to. Verified against document index.",
     )
     quoted_evidence: str = Field(
         ...,
-        description="Verbatim quoted text or asset description from the cited anchor block.",
+        description="Verbatim quoted text or asset description from the cited anchor block. Must be a complete, non-truncated clause verified against document text.",
     )
     critique_dimension: CritiqueDimension = Field(
         ...,
@@ -37,7 +50,7 @@ class CritiquePoint(BaseModel):
     )
     critique_text: str = Field(
         ...,
-        description="The structured evaluation / critique reacting to the cited evidence.",
+        description="The structured evaluation / critique reacting to the cited evidence, synthesizing domain knowledge and methodological analysis.",
     )
     confidence: CritiqueConfidence = Field(
         ...,
@@ -55,7 +68,11 @@ class DroppedCritiquePoint(BaseModel):
 
 
 class MethodologyCritiqueReport(BaseModel):
-    """Complete structured critique report for Methodology sections."""
+    """Complete structured critique report for Methodology sections.
+
+    All points in `critiques` and `strengths` have passed deterministic quote-grounding verification.
+    Any ungrounded or mismatched candidates are logged in `dropped_points`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

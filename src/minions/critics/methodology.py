@@ -6,7 +6,12 @@ Evaluates scientific paper methodology sections against structured criteria:
 - Acknowledged Limitations
 - Method Appropriateness
 
-Enforces strict post-hoc grounding verification against parsed anchor blocks.
+Grounding Guarantee:
+- Enforces strict post-hoc grounding verification against parsed anchor blocks.
+- Verifies that cited anchor IDs exist in the document index and that quoted_evidence
+  is an exact verbatim substring within the cited block.
+- 'critique_text' provides expert peer review reasoning and domain analysis reacting
+  to that grounded anchor evidence.
 """
 
 import json
@@ -168,7 +173,8 @@ class MethodologyCritic:
             "- 'strengths': ONLY emit confirmatory and rigorous observations where the methodology is explicitly well-specified, well-controlled, or structurally sound.\n\n"
             "### GROUNDING MANDATE:\n"
             "- Every point in both arrays MUST cite the exact anchor ID(s) (e.g. ['sec_methodology_4_1_..._b02']) from the document catalog.\n"
-            "- Every point MUST provide 'quoted_evidence' as a short, EXACT verbatim quote copied directly from the cited anchor block text.\n"
+            "- Every point MUST provide 'quoted_evidence' as a complete, exact verbatim clause or sentence copied directly from the cited anchor block text.\n"
+            "- IMPORTANT: Do NOT truncate quotes mid-sentence or mid-clause (e.g. do NOT truncate at '(Fig.' — include the complete phrase '(Fig. 1, left).').\n"
             "- If evidence is ambiguous, set confidence to 'medium' or 'low'. Otherwise 'high'.\n\n"
             "### OUTPUT JSON FORMAT:\n"
             "You MUST respond ONLY with a valid JSON object with the following structure:\n"
@@ -176,7 +182,7 @@ class MethodologyCritic:
             '  "critiques": [\n'
             "    {\n"
             '      "anchor_ids": ["anchor_id"],\n'
-            '      "quoted_evidence": "exact verbatim quote from block",\n'
+            '      "quoted_evidence": "exact verbatim complete clause from block",\n'
             '      "critique_dimension": "reproducibility|assumptions|limitations|appropriateness",\n'
             '      "critique_text": "description of gap/risk/unjustified choice",\n'
             '      "confidence": "high|medium|low"\n'
@@ -185,7 +191,7 @@ class MethodologyCritic:
             '  "strengths": [\n'
             "    {\n"
             '      "anchor_ids": ["anchor_id"],\n'
-            '      "quoted_evidence": "exact verbatim quote from block",\n'
+            '      "quoted_evidence": "exact verbatim complete clause from block",\n'
             '      "critique_dimension": "reproducibility|assumptions|limitations|appropriateness",\n'
             '      "critique_text": "description of well-specified strength",\n'
             '      "confidence": "high|medium|low"\n'

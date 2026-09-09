@@ -87,7 +87,7 @@ def get_claude_review_for_paper(paper_title: str, catalog_text: str) -> str:
             "strengths": [
                 {
                     "anchor_ids": ["sec_methodology_3_1_residual_learning_b02"],
-                    "quoted_evidence": "This reformulation is motivated by the counterintuitive phenomena about the degradation problem (Fig.",
+                    "quoted_evidence": "This reformulation is motivated by the counterintuitive phenomena about the degradation problem (Fig. 1, left).",
                     "critique_dimension": "appropriateness",
                     "critique_text": "The residual reformulation y = F(x) + x is directly tailored to solve the optimization degradation problem: by re-framing stacked layers to fit residual mappings, solvers can naturally learn identity mappings by driving weights toward zero, ensuring deeper networks do not incur higher training error.",
                     "confidence": "high"
@@ -179,15 +179,15 @@ def get_claude_review_for_paper(paper_title: str, catalog_text: str) -> str:
                     "confidence": "high"
                 },
                 {
-                    "anchor_ids": ["sec_methodology_3_5_positional_encoding_b03"],
-                    "quoted_evidence": "We chose this version because we hypothesized it would allow the model to easily learn to attend by relative positions, since for any fixed offset k , P E pos+ k can be represented as a linear function of P E pos .",
+                    "anchor_ids": ["sec_methodology_3_5_positional_encoding_b05"],
+                    "quoted_evidence": "We chose this function because we hypothesized it would allow the model to easily learn to attend by relative positions, since for any fixed offset k , PE pos + k can be represented as a linear function of PE pos .",
                     "critique_dimension": "limitations",
                     "critique_text": "The sinusoidal positional encoding is adopted based on the theoretical hypothesis of linear relative position shifts, but the methodology acknowledges that learned positional embeddings produce virtually identical results, leaving the inductive superiority of fixed sinusoids unproven.",
                     "confidence": "medium"
                 },
                 {
                     "anchor_ids": ["sec_methodology_5_3_optimizer_b04"],
-                    "quoted_evidence": "This corresponds to increasing the learning rate linearly for the first warmup_steps training steps, and decreasing it thereafter proportionally to the inverse square root of the step number.",
+                    "quoted_evidence": "This corresponds to increasing the learning rate linearly for the first warmup _ steps training steps, and decreasing it thereafter proportionally to the inverse square root of the step number.",
                     "critique_dimension": "reproducibility",
                     "critique_text": "While the learning rate formula is explicitly provided, the sensitivity of training stability to the exact warmup_steps threshold (4000) and model dimension scaling factor d_model^(-0.5) is left unmotivated by ablation.",
                     "confidence": "medium"
@@ -195,7 +195,7 @@ def get_claude_review_for_paper(paper_title: str, catalog_text: str) -> str:
             ],
             "strengths": [
                 {
-                    "anchor_ids": ["sec_methodology_3_2_2_multi_head_attentio_b03"],
+                    "anchor_ids": ["sec_methodology_3_2_2_multi_head_attentio_b08"],
                     "quoted_evidence": "Multi-head attention allows the model to jointly attend to information from different representation subspaces at different positions.",
                     "critique_dimension": "appropriateness",
                     "critique_text": "Multi-head attention with projected dimensions d_k = d_v = d_model / h appropriately preserves total computational complexity comparable to single-head attention while enabling the model to attend to diverse representation subspaces simultaneously.",
@@ -209,8 +209,8 @@ def get_claude_review_for_paper(paper_title: str, catalog_text: str) -> str:
                     "confidence": "high"
                 },
                 {
-                    "anchor_ids": ["sec_methodology_5_3_optimizer_b03"],
-                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with β 1 = 0.9, β 2 = 0.98 and ϵ = 10 − 9 .",
+                    "anchor_ids": ["sec_methodology_5_3_optimizer_b01"],
+                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with β 1 = 0 . 9 , β 2 = 0 . 98 and ϵ = 10 − 9 .",
                     "critique_dimension": "reproducibility",
                     "critique_text": "Optimizer configuration is fully specified with exact beta1, beta2, epsilon, and custom learning rate scheduling formulas.",
                     "confidence": "high"
