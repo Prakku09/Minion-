@@ -22,16 +22,12 @@ class MethodologyScorer:
 
     def __init__(
         self,
-        custom_scoring_fn: Optional[
-            Callable[[CritiqueDimension, List[CritiquePoint], List[CritiquePoint], int], DimensionScore]
-        ] = None,
         custom_llm_fn: Optional[Callable[..., Any]] = None,
         model: str = "gpt-4o",
         provider: Optional[str] = None,
         api_key: Optional[str] = None,
         temperature: float = 0.8,
     ):
-        self.custom_scoring_fn = custom_scoring_fn
         self.custom_llm_fn = custom_llm_fn
         self.model = model
         self.provider = provider or self._detect_provider(model)
@@ -361,35 +357,6 @@ class MethodologyScorer:
             raise RuntimeError(f"Gemini scoring for {dimension.value}, pass {pass_id} returned invalid JSON.")
         return normalized
 
-    def _build_dimension_reasoning(
-        self,
-        dimension: CritiqueDimension,
-        core_critiques: List[CritiquePoint],
-        core_strengths: List[CritiquePoint],
-        sec_critiques: List[CritiquePoint],
-        sec_strengths: List[CritiquePoint],
-        rating: int,
-        pass_id: int = 1,
-    ) -> str:
-        lines: List[str] = []
-
-        if core_strengths:
-            s_anchors = ", ".join(f"[{s.anchor_ids[0]}]" for s in core_strengths)
-            lines.append(f"Core strengths ({s_anchors}): " + "; ".join(s.critique_text for s in core_strengths))
-
-        if core_critiques:
-            c_anchors = ", ".join(f"[{c.anchor_ids[0]}]" for c in core_critiques)
-            lines.append(f"Core critique gaps ({c_anchors}): " + "; ".join(c.critique_text for c in core_critiques))
-
-        if sec_critiques:
-            sec_anchors = ", ".join(f"[{c.anchor_ids[0]}]" for c in sec_critiques)
-            lines.append(f"Secondary observations ({sec_anchors}): " + "; ".join(c.critique_text for c in sec_critiques))
-
-        if not lines:
-            return f"Dimension '{dimension.value}' evaluated with standard criteria (Rating {rating}/5)."
-
-        return f"Rating {rating}/5. " + " | ".join(lines)
-
     def _compute_scoring_agreement(
         self, pass_1: Dict[str, int], pass_2: Dict[str, int]
     ) -> Tuple[float, float, float]:
@@ -403,7 +370,6 @@ class MethodologyScorer:
         mean_delta = round(total_delta / len(dims), 4)
 
         return exact_match_rate, near_miss_rate, mean_delta
-
 
     def _normalize_dimension_payload(self, payload: Any, dimension: CritiqueDimension) -> Optional[Dict[str, Any]]:
         if payload is None:
@@ -442,8 +408,6 @@ class MethodologyScorer:
             }
         except Exception:
             return None
-
-    def _call_openai_dimension(self, pass_id: int, dimension: CritiqueDimension, prompt: str) -> Dict[str, Any]:
         import openai
 
         system_prompt = (
@@ -509,43 +473,6 @@ class MethodologyScorer:
         if normalized is None:
             raise RuntimeError(f"Gemini scoring for {dimension.value}, pass {pass_id} returned invalid JSON.")
         return normalized
-
-    def _build_dimension_reasoning(
-        self,
-        dimension: CritiqueDimension,
-        core_critiques: List[CritiquePoint],
-        core_strengths: List[CritiquePoint],
-        sec_critiques: List[CritiquePoint],
-        sec_strengths: List[CritiquePoint],
-        rating: int,
-        pass_id: int = 1,
-    ) -> str:
-        """Synthesize written reasoning referencing core anchors."""
-        lines = []
-
-        if core_strengths:
-            s_anchors = ", ".join(f"[{s.anchor_ids[0]}]" for s in core_strengths)
-            lines.append(
-                f"Core strengths ({s_anchors}): "
-                + "; ".join(s.critique_text for s in core_strengths)
-            )
-
-        if core_critiques:
-            c_anchors = ", ".join(f"[{c.anchor_ids[0]}]" for c in core_critiques)
-            lines.append(
-                f"Core critique gaps ({c_anchors}): "
-                + "; ".join(c.critique_text for c in core_critiques)
-            )
-
-        if sec_critiques:
-            sec_anchors = ", ".join(f"[{c.anchor_ids[0]}]" for c in sec_critiques)
-            lines.append(f"Secondary observations ({sec_anchors}): " + "; ".join(c.critique_text for c in sec_critiques))
-
-        if not lines:
-            return f"Dimension '{dimension.value}' evaluated with standard criteria (Rating {rating}/5)."
-
-        return f"Rating {rating}/5. " + " | ".join(lines)
-
     def _compute_scoring_agreement(
         self, pass_1: Dict[str, int], pass_2: Dict[str, int]
     ) -> Tuple[float, float, float]:

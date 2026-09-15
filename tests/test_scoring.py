@@ -72,6 +72,54 @@ def test_consensus_aggregation_core_vs_secondary():
     assert s_shared.consensus == ConsensusType.CORE
 
 
+def test_consensus_uses_configured_core_threshold_ratio():
+    """The configured threshold ratio should drive the core-vs-secondary split instead of a hardcoded 2/3 rule."""
+    cp = CritiquePoint(
+        anchor_ids=["sec_m_b01"],
+        quoted_evidence="SGD with batch size 256",
+        critique_dimension=CritiqueDimension.REPRODUCIBILITY,
+        critique_text="Training schedule lacks a stability check across batch sizes.",
+        confidence=CritiqueConfidence.HIGH,
+    )
+
+    r1 = _make_report(critiques=[cp], strengths=[])
+    r2 = _make_report(critiques=[cp], strengths=[])
+    r3 = _make_report(critiques=[], strengths=[])
+
+    aggregator = ConsensusAggregator(core_threshold_ratio=0.75)
+    consensus_report = aggregator.aggregate_runs([r1, r2, r3])
+
+    assert len(consensus_report.critiques) == 1
+    assert consensus_report.critiques[0].consensus == ConsensusType.SECONDARY
+
+
+def test_consensus_clusters_similar_points_across_anchor_variants():
+    """Equivalent critiques should cluster together even when they are anchored to different nearby blocks."""
+    cp_a = CritiquePoint(
+        anchor_ids=["sec_m_b01"],
+        quoted_evidence="SGD with batch size 256",
+        critique_dimension=CritiqueDimension.REPRODUCIBILITY,
+        critique_text="Training schedule lacks a stability check across batch sizes.",
+        confidence=CritiqueConfidence.HIGH,
+    )
+    cp_b = CritiquePoint(
+        anchor_ids=["sec_m_b02"],
+        quoted_evidence="the optimizer is annealed every 30 epochs",
+        critique_dimension=CritiqueDimension.REPRODUCIBILITY,
+        critique_text="Training schedule lacks a stability check across batch sizes.",
+        confidence=CritiqueConfidence.HIGH,
+    )
+
+    r1 = _make_report(critiques=[cp_a], strengths=[])
+    r2 = _make_report(critiques=[cp_b], strengths=[])
+
+    aggregator = ConsensusAggregator()
+    consensus_report = aggregator.aggregate_runs([r1, r2])
+
+    assert len(consensus_report.critiques) == 1
+    assert consensus_report.critiques[0].consensus == ConsensusType.CORE
+
+
 def test_scorer_requires_real_llm_dual_pass_when_no_api_is_configured():
     """A real dual-pass scoring run must fail loudly if no API-backed scorer is configured."""
     cp_core = CritiquePoint(

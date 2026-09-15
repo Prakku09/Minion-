@@ -1,10 +1,7 @@
-"""Consensus Aggregator for Multi-Run Methodology Critic.
+"""Consensus Aggregator for Multi-Run Methodology Critic."""
 
-Classifies candidate critique and strength points into:
-- CORE: Appears in >= 2/3 independent runs (same anchor_id + critique_dimension).
-- SECONDARY: Appears in only 1/3 runs.
-"""
-
+import math
+import re
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
 
@@ -23,9 +20,21 @@ class ConsensusAggregator:
         """Initialize Consensus Aggregator.
 
         Args:
-            core_threshold_ratio: Minimum fraction of runs required for 'core' classification (default 0.60 for >=2/3).
+            core_threshold_ratio: Minimum fraction of runs required for 'core' classification.
         """
+        if not 0 < core_threshold_ratio <= 1:
+            raise ValueError("core_threshold_ratio must be within (0, 1].")
         self.core_threshold_ratio = core_threshold_ratio
+
+    def _core_threshold_for_runs(self, n_runs: int) -> int:
+        return max(1, math.ceil(n_runs * self.core_threshold_ratio))
+
+    def _cluster_key(self, point: CritiquePoint) -> Tuple[str, str]:
+        dimension = point.critique_dimension.value
+        normalized = re.sub(r"\s+", " ", point.critique_text.strip().lower())
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+        normalized = " ".join(normalized.split())
+        return dimension, normalized or point.quoted_evidence.strip().lower()
 
     def aggregate_runs(
         self, reports: List[MethodologyCritiqueReport]
@@ -35,7 +44,7 @@ class ConsensusAggregator:
             raise ValueError("Must provide at least 1 MethodologyCritiqueReport to aggregate.")
 
         n_runs = len(reports)
-        min_core_runs = 2 if n_runs >= 3 else 1
+        min_core_runs = self._core_threshold_for_runs(n_runs)
 
         # 1. Aggregate and classify critiques
         consensus_critiques = self._cluster_and_classify(
@@ -82,27 +91,25 @@ class ConsensusAggregator:
     def _cluster_and_classify(
         self, runs_points: List[List[CritiquePoint]], min_core_runs: int
     ) -> List[CritiquePoint]:
-        """Cluster points across runs by (anchor_id, dimension) and classify consensus."""
-        # Key: (primary_anchor_id, dimension) -> List of (run_idx, CritiquePoint)
+        """Cluster points across runs by critique semantics within a dimension."""
         clusters: Dict[Tuple[str, str], List[Tuple[int, CritiquePoint]]] = defaultdict(list)
 
         for run_idx, points in enumerate(runs_points):
-            # Track seen keys within the same run to avoid double-counting within a single run
             seen_in_run: Set[Tuple[str, str]] = set()
             for p in points:
-                primary_aid = p.anchor_ids[0] if p.anchor_ids else ""
-                key = (primary_aid, p.critique_dimension.value)
+                key = self._cluster_key(p)
                 if key not in seen_in_run:
                     seen_in_run.add(key)
                     clusters[key].append((run_idx, p))
 
         classified_points: List[CritiquePoint] = []
 
-        for (aid, dim), run_matches in clusters.items():
+        for key, run_matches in clusters.items():
             run_count = len(run_matches)
-            consensus_level = ConsensusType.CORE if run_count >= min_core_runs else ConsensusType.SECONDARY
+            consensus_level = (
+                ConsensusType.CORE if run_count >= min_core_runs else ConsensusType.SECONDARY
+            )
 
-            # Select the most representative candidate (prefer highest confidence, longest quote)
             best_point = max(
                 (p for _, p in run_matches),
                 key=lambda pt: (
@@ -112,7 +119,6 @@ class ConsensusAggregator:
                 ),
             )
 
-            # Create new point with assigned consensus
             updated_point = CritiquePoint(
                 anchor_ids=best_point.anchor_ids,
                 quoted_evidence=best_point.quoted_evidence,
@@ -123,7 +129,6 @@ class ConsensusAggregator:
             )
             classified_points.append(updated_point)
 
-        # Sort: core first, then by dimension, then by anchor ID
         classified_points.sort(
             key=lambda p: (
                 0 if p.consensus == ConsensusType.CORE else 1,
@@ -146,9 +151,10 @@ class ConsensusAggregator:
         core_strengths = [s for s in strengths if s.consensus == ConsensusType.CORE]
         sec_strengths = [s for s in strengths if s.consensus == ConsensusType.SECONDARY]
 
+        threshold = self._core_threshold_for_runs(n_runs)
         return (
             f"Consensus aggregation across N={n_runs} independent runs identified "
-            f"{len(core_critiques)} core critiques (present in >=2/3 runs), {len(sec_critiques)} secondary critiques, "
+            f"{len(core_critiques)} core critiques (present in >= {threshold}/{n_runs} runs), {len(sec_critiques)} secondary critiques, "
             f"{len(core_strengths)} core strengths, and {len(sec_strengths)} secondary strengths. "
             f"Grounding verification retained {len(critiques) + len(strengths)} verified points ({dropped_count} dropped)."
         )
