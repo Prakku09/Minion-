@@ -9,7 +9,7 @@ Grounding Contract:
 """
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -24,6 +24,13 @@ class CritiqueConfidence(str, Enum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class ConsensusType(str, Enum):
+    """Consensus level across independent critic runs."""
+
+    CORE = "core"  # Present in >= 2/3 independent runs
+    SECONDARY = "secondary"  # Present in only 1/3 independent runs
 
 
 class CritiquePoint(BaseModel):
@@ -56,6 +63,10 @@ class CritiquePoint(BaseModel):
         ...,
         description="Confidence level of the critique based on clarity of document evidence (high, medium, low).",
     )
+    consensus: Optional[ConsensusType] = Field(
+        default=None,
+        description="Consensus classification: 'core' (present in >= 2/3 runs) or 'secondary' (in 1/3 runs).",
+    )
 
 
 class DroppedCritiquePoint(BaseModel):
@@ -65,6 +76,96 @@ class DroppedCritiquePoint(BaseModel):
 
     point: CritiquePoint = Field(..., description="The candidate point that was rejected.")
     drop_reason: str = Field(..., description="The exact reason verification failed.")
+
+
+class DimensionScore(BaseModel):
+    """1 to 5 rating and structured reasoning for a single methodology rubric dimension."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rating: int = Field(
+        ...,
+        ge=1,
+        le=5,
+        description="Final resolved rating from the dual-pass scoring policy.",
+    )
+    reasoning: str = Field(
+        ...,
+        description="Written justification referencing the specific core critiques and strengths that drove the final score.",
+    )
+    based_on_anchor_ids: List[str] = Field(
+        default_factory=list,
+        description="Exact anchor IDs of the core/secondary points that informed the final score.",
+    )
+    pass_1_rating: Optional[int] = Field(
+        default=None,
+        description="Raw integer rating from the neutral Pass 1 LLM reviewer.",
+    )
+    pass_2_rating: Optional[int] = Field(
+        default=None,
+        description="Raw integer rating from the skeptical Pass 2 LLM reviewer.",
+    )
+    pass_1_reasoning: Optional[str] = Field(
+        default=None,
+        description="Pass 1 reviewer reasoning for this dimension.",
+    )
+    pass_2_reasoning: Optional[str] = Field(
+        default=None,
+        description="Pass 2 reviewer reasoning for this dimension.",
+    )
+    disagreement_flag: Optional[str] = Field(
+        default=None,
+        description="Optional label for near-miss or high disagreement between the two LLM passes.",
+    )
+
+
+class MethodologyScores(BaseModel):
+    """Complete rubric scoring report across all 4 methodology dimensions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reproducibility: DimensionScore = Field(
+        ..., description="Score and reasoning for Reproducibility dimension."
+    )
+    assumptions: DimensionScore = Field(
+        ..., description="Score and reasoning for Stated Assumptions dimension."
+    )
+    limitations: DimensionScore = Field(
+        ..., description="Score and reasoning for Acknowledged Limitations dimension."
+    )
+    appropriateness: DimensionScore = Field(
+        ..., description="Score and reasoning for Method Appropriateness dimension."
+    )
+    overall_rating: float = Field(
+        ...,
+        ge=1.0,
+        le=5.0,
+        description="Mean score across the 4 dimensions (1.0 to 5.0).",
+    )
+    pass_1_scores: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Raw integer scores from Primary Balanced Reviewer pass (Pass 1).",
+    )
+    pass_2_scores: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Raw integer scores from Independent Skeptical Auditor pass (Pass 2).",
+    )
+    exact_match_rate: Optional[float] = Field(
+        default=None,
+        description="Fraction of dimensions with exact rating agreement (|delta| == 0).",
+    )
+    near_miss_rate: Optional[float] = Field(
+        default=None,
+        description="Fraction of dimensions with near-miss agreement (|delta| <= 1).",
+    )
+    mean_absolute_delta: Optional[float] = Field(
+        default=None,
+        description="Mean absolute difference between Pass 1 and Pass 2 ratings across dimensions.",
+    )
+    scoring_pass_agreement: Optional[float] = Field(
+        default=None,
+        description="Exact agreement rate between dual scoring passes (legacy field).",
+    )
 
 
 class MethodologyCritiqueReport(BaseModel):
@@ -102,4 +203,12 @@ class MethodologyCritiqueReport(BaseModel):
     )
     summary: Optional[str] = Field(
         default=None, description="High-level synthesis of methodological findings."
+    )
+    scores: Optional[MethodologyScores] = Field(
+        default=None,
+        description="Rubric-based 1-5 ratings and structured justifications across dimensions.",
+    )
+    runs_evaluated_count: Optional[int] = Field(
+        default=None,
+        description="Number of independent critic runs evaluated to determine consensus.",
     )

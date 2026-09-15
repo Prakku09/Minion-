@@ -15,11 +15,14 @@ from minions.schema.paper import (
     Table,
 )
 from minions.schema.critique import (
+    ConsensusType,
     CritiqueConfidence,
     CritiqueDimension,
     CritiquePoint,
+    DimensionScore,
     DroppedCritiquePoint,
     MethodologyCritiqueReport,
+    MethodologyScores,
 )
 
 __all__ = [
@@ -35,9 +38,12 @@ __all__ = [
     "Section",
     "SectionParseConfidence",
     "Table",
+    "ConsensusType",
     "CritiqueConfidence",
     "CritiqueDimension",
     "CritiquePoint",
+    "DimensionScore",
     "DroppedCritiquePoint",
     "MethodologyCritiqueReport",
+    "MethodologyScores",
 ]
