@@ -45,7 +45,7 @@ def valid_llm(prompt, system_prompt):
     "critiques": [
         {
             "anchor_ids": ["results_b01"],
-            "quoted_evidence": "using accuracy and top-5 accuracy",
+            "quoted_evidence": "We report accuracy and top-5 accuracy",
             "critique_dimension": "evaluation_rigor",
             "critique_text": "The evaluation reports multiple accuracy metrics, which provides useful evidence for model performance.",
             "confidence": "high"
@@ -78,6 +78,14 @@ def test_results_critic_grounding():
 
     report = critic.critique_paper(FakePaper())
 
+    print()
+    print("=== VALID GROUNDING DEBUG ===")
+    print("Critiques:", report.critiques)
+    print("Dropped:", report.dropped_points)
+    print("Hallucination rate:", report.hallucination_rate)
+    print("==============================")
+    print()
+
     assert len(report.critiques) == 1
     assert len(report.dropped_points) == 0
     assert report.hallucination_rate == 0.0
@@ -89,6 +97,14 @@ def test_results_critic_drops_hallucination():
     critic = ResultsCritic(custom_llm_fn=hallucinated_llm)
 
     report = critic.critique_paper(FakePaper())
+
+    print()
+    print("=== HALLUCINATION DEBUG ===")
+    print("Critiques:", report.critiques)
+    print("Dropped:", report.dropped_points)
+    print("Hallucination rate:", report.hallucination_rate)
+    print("============================")
+    print()
 
     assert len(report.critiques) == 0
     assert len(report.dropped_points) == 1
