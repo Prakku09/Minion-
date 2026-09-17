@@ -13,6 +13,7 @@ from minions.critics.consensus import ConsensusAggregator
 from minions.critics.methodology import MethodologyCritic
 from minions.critics.results import ResultsCritic
 from minions.critics.scorer import MethodologyScorer
+from minions.parser.pipeline import StructureParserPipeline
 
 def get_resnet_review_run(run_id: int) -> str:
     """Deterministic methodology review fixture for the ResNet paper."""
