@@ -14,6 +14,8 @@ from minions.critics.methodology import MethodologyCritic
 from minions.critics.results import ResultsCritic
 from minions.critics.scorer import MethodologyScorer
 from minions.parser.pipeline import StructureParserPipeline
+from minions.schema.critique import ConsensusType
+from minions.schema.results_critique import ResultsCritiquePoint, ResultsCritiqueReport
 
 def get_resnet_review_run(run_id: int) -> str:
     """Deterministic methodology review fixture for the ResNet paper."""
@@ -613,6 +615,131 @@ def get_review_for_paper_run(paper_name: str, run_id: int) -> str:
     return json.dumps({"critiques": [], "strengths": []})
 
 
+def get_methodology_score_for_paper(
+    paper_name,
+    pass_id,
+    dimension,
+    evidence,
+    prompt,
+):
+    """Return deterministic offline scores from the verified consensus evidence.
+
+    This fixture stands in for an LLM only in the local Phase 3 harness. Ratings
+    are based on CORE strengths and critiques; secondary points provide context
+    and anchor coverage but do not drive the rating.
+    """
+    core_critiques = evidence.get("core_critiques", [])
+    core_strengths = evidence.get("core_strengths", [])
+    secondary_critiques = evidence.get("secondary_critiques", [])
+
+    core_anchor_ids = []
+    for point in core_critiques + core_strengths:
+        core_anchor_ids.extend(point.get("anchor_ids", []))
+    anchor_ids = list(dict.fromkeys(core_anchor_ids))
+    if not anchor_ids:
+        for point in secondary_critiques:
+            anchor_ids.extend(point.get("anchor_ids", []))
+        anchor_ids = list(dict.fromkeys(anchor_ids))
+
+    if core_critiques and core_strengths:
+        balanced_rating = 3
+    elif core_strengths:
+        balanced_rating = 4
+    elif core_critiques:
+        balanced_rating = 2
+    else:
+        balanced_rating = 3
+
+    rating = balanced_rating
+    if pass_id == 2 and core_critiques:
+        rating = max(1, balanced_rating - 1)
+
+    dimension_name = getattr(dimension, "value", str(dimension))
+    perspective = "Balanced Peer Reviewer" if pass_id == 1 else "Skeptical Auditor"
+    reasoning = (
+        f"{perspective} offline fixture for {paper_name}: {dimension_name} is "
+        f"rated {rating}/5 from {len(core_strengths)} CORE strength(s) and "
+        f"{len(core_critiques)} CORE critique(s)."
+    )
+    if anchor_ids:
+        reasoning += f" Primary evidence anchors: {', '.join(anchor_ids)}."
+    if secondary_critiques:
+        reasoning += (
+            f" Secondary context includes {len(secondary_critiques)} critique(s) "
+            "and does not change the primary rating."
+        )
+
+    return {
+        "rating": rating,
+        "reasoning": reasoning,
+        "based_on_anchor_ids": anchor_ids,
+    }
+
+
+def aggregate_results_runs(reports):
+    """Aggregate Results Critic reports without crossing schema boundaries."""
+    if not reports:
+        raise ValueError("Must provide at least one Results Critique report.")
+
+    threshold = max(1, (len(reports) * 60 + 99) // 100)
+    grouped = {}
+    for report in reports:
+        seen_in_run = set()
+        for point in report.critiques + report.strengths:
+            key = (
+                point.critique_dimension.value,
+                " ".join(point.critique_text.lower().split()),
+                point in report.strengths,
+            )
+            if key in seen_in_run:
+                continue
+            seen_in_run.add(key)
+            grouped.setdefault(key, []).append(point)
+
+    critiques = []
+    strengths = []
+    for key, points in grouped.items():
+        best = max(
+            points,
+            key=lambda point: (
+                point.confidence.value == "high",
+                len(point.quoted_evidence),
+            ),
+        )
+        consensus = ConsensusType.CORE if len(points) >= threshold else ConsensusType.SECONDARY
+        merged = ResultsCritiquePoint(
+            anchor_ids=best.anchor_ids,
+            quoted_evidence=best.quoted_evidence,
+            critique_dimension=best.critique_dimension,
+            critique_text=best.critique_text,
+            confidence=best.confidence,
+            consensus=consensus,
+        )
+        (strengths if key[2] else critiques).append(merged)
+
+    first = reports[0]
+    total_points = sum(len(report.critiques) + len(report.strengths) for report in reports)
+    summary = (
+        f"Results consensus across N={len(reports)} independent runs identified "
+        f"{sum(point.consensus == ConsensusType.CORE for point in critiques + strengths)} "
+        f"core and {sum(point.consensus == ConsensusType.SECONDARY for point in critiques + strengths)} "
+        "secondary verified points."
+    )
+    return ResultsCritiqueReport(
+        schema_version=first.schema_version,
+        paper_title=first.paper_title,
+        target_sections=first.target_sections,
+        critiques=critiques,
+        strengths=strengths,
+        dropped_points=[dropped for report in reports for dropped in report.dropped_points],
+        hallucination_rate=round(
+            sum(report.hallucination_rate for report in reports) / len(reports), 4
+        ),
+        summary=summary,
+        runs_evaluated_count=len(reports),
+    )
+
+
 def run_phase3_evaluation():
     papers = [
         ("resnet.pdf", "tests/data/resnet.pdf"),
@@ -623,7 +750,6 @@ def run_phase3_evaluation():
 
     pipeline = StructureParserPipeline(dpi=150)
     aggregator = ConsensusAggregator(core_threshold_ratio=0.60)
-    scorer = MethodologyScorer()
 
     for paper_name, pdf_path in papers:
         print("=" * 80)
@@ -668,6 +794,16 @@ def run_phase3_evaluation():
                 f"{len(results_report.strengths)} verified strengths."
             )
 
+        results_consensus_report = aggregate_results_runs(results_raw_reports)
+        results_consensus_file = os.path.join(out_dir, "04_results_consensus.json")
+        with open(results_consensus_file, "w", encoding="utf-8") as f:
+            f.write(results_consensus_report.model_dump_json(indent=2))
+        print(
+            f"Results consensus: {len(results_consensus_report.critiques)} critiques, "
+            f"{len(results_consensus_report.strengths)} strengths."
+        )
+        print(f"Results consensus saved to: {results_consensus_file}")
+
         # 2. Consensus Aggregation
         consensus_report = aggregator.aggregate_runs(raw_reports)
         core_c = [c for c in consensus_report.critiques if c.consensus.value == "core"]
@@ -678,6 +814,15 @@ def run_phase3_evaluation():
         print(f"\nConsensus Summary: {len(consensus_report.critiques)} Critiques ({len(core_c)} CORE, {len(sec_c)} SECONDARY) | {len(consensus_report.strengths)} Strengths ({len(core_s)} CORE, {len(sec_s)} SECONDARY)\n")
 
         # 3. Dual-Pass Scoring
+        scorer = MethodologyScorer(
+            custom_llm_fn=lambda pass_id, dimension, evidence, prompt: get_methodology_score_for_paper(
+                paper_name,
+                pass_id,
+                dimension,
+                evidence,
+                prompt,
+            )
+        )
         scored_report = scorer.score_report(consensus_report, output_dir=out_dir)
         scores = scored_report.scores
 
