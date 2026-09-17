@@ -13,132 +13,13 @@ from minions.critics.consensus import ConsensusAggregator
 from minions.critics.methodology import MethodologyCritic
 from minions.critics.results import ResultsCritic
 from minions.critics.scorer import MethodologyScorer
-
-def get_resnet_review_run(run_id: int) -> str:
-    """Deterministic methodology review fixture for the ResNet paper."""
-
-    reviews = {
-        1: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_methodology_3_1_residual_learning_b01"],
-                    "quoted_evidence": "We present a residual learning framework to ease the training of networks that are substantially deeper than those used previously.",
-                    "critique_dimension": "assumptions",
-                    "critique_text": "The residual-learning formulation assumes that learning a residual function is easier to optimize than directly learning the desired underlying mapping, but the comparative optimization benefit is established primarily through experiments.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b04"],
-                    "quoted_evidence": "The shortcut connections simply perform identity mapping.",
-                    "critique_dimension": "limitations",
-                    "critique_text": "Identity shortcuts avoid introducing additional parameters, but the approach does not establish that identity mappings are optimal for every architecture or task.",
-                    "confidence": "medium",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_4_implementation_b01"],
-                    "quoted_evidence": "We use batch normalization (BN) right after each convolution and before activation.",
-                    "critique_dimension": "reproducibility",
-                    "critique_text": "The implementation description specifies important architectural and normalization choices, although complete reproduction also depends on the detailed training configuration reported elsewhere in the paper.",
-                    "confidence": "high",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b05"],
-                    "quoted_evidence": "When the input and output dimensions are the same, the shortcut connection is simply an identity mapping.",
-                    "critique_dimension": "appropriateness",
-                    "critique_text": "Using identity shortcuts when dimensions match is architecturally appropriate because it preserves the shortcut path without introducing unnecessary projection parameters.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_4_implementation_b02"],
-                    "quoted_evidence": "The weights are initialized according to the method in [13].",
-                    "critique_dimension": "reproducibility",
-                    "critique_text": "The implementation explicitly identifies the weight initialization procedure, providing a reproducibility-relevant reference to the initialization method.",
-                    "confidence": "high",
-                },
-            ],
-        },
-        2: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_methodology_3_1_residual_learning_b03"],
-                    "quoted_evidence": "The underlying mapping is recast into F(x) + x.",
-                    "critique_dimension": "assumptions",
-                    "critique_text": "The residual formulation assumes that optimizing the residual mapping is easier than optimizing the original mapping directly; this assumption is supported empirically rather than universally established.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b04"],
-                    "quoted_evidence": "The shortcut connections simply perform identity mapping.",
-                    "critique_dimension": "limitations",
-                    "critique_text": "Identity shortcuts are parameter-free when dimensions match, but they do not directly address cases where the input and output dimensions differ.",
-                    "confidence": "medium",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b05"],
-                    "quoted_evidence": "identity mapping",
-                    "critique_dimension": "appropriateness",
-                    "critique_text": "The identity shortcut provides a direct information path through the block and avoids additional parameters when the dimensions are unchanged.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_4_implementation_b01"],
-                    "quoted_evidence": "batch normalization (BN)",
-                    "critique_dimension": "reproducibility",
-                    "critique_text": "The paper clearly specifies the placement of batch normalization relative to convolution and activation, which is important for reproducing the architecture.",
-                    "confidence": "high",
-                },
-            ],
-        },
-        3: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_methodology_3_1_residual_learning_b01"],
-                    "quoted_evidence": "substantially deeper than those used previously",
-                    "critique_dimension": "assumptions",
-                    "critique_text": "The proposed residual formulation is motivated by the optimization difficulty of very deep plain networks, but the mechanism is validated mainly through empirical comparisons.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b10"],
-                    "quoted_evidence": "shortcut connections",
-                    "critique_dimension": "limitations",
-                    "critique_text": "Shortcut design introduces architectural assumptions about how information should bypass residual transformations, and the paper primarily evaluates the selected designs empirically.",
-                    "confidence": "medium",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_methodology_3_2_identity_mapping_by_s_b04"],
-                    "quoted_evidence": "identity mapping",
-                    "critique_dimension": "appropriateness",
-                    "critique_text": "Identity shortcuts are a simple and parameter-efficient mechanism for improving information and gradient propagation through deep residual blocks.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_methodology_3_4_implementation_b02"],
-                    "quoted_evidence": "weights are initialized",
-                    "critique_dimension": "reproducibility",
-                    "critique_text": "The implementation section identifies the initialization procedure used for the network weights, supporting reproducibility.",
-                    "confidence": "high",
-                },
-            ],
-        },
-    }
-
-    return json.dumps(reviews.get(run_id, {"critiques": [], "strengths": []}))
-
-
 def get_lora_review_run(run_id: int) -> str:
     if run_id == 1:
         return json.dumps({
             "critiques": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b04"],
-                    "quoted_evidence": "When optimizing with Adam, tuning Î± is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set Î± to the first r we try and do not tune it.",
+                    "quoted_evidence": "When optimizing with Adam, tuning α is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set α to the first r we try and do not tune it.",
                     "critique_dimension": "assumptions",
                     "critique_text": "Rank r and scaling factor alpha selection is driven purely by empirical heuristics without mathematical derivation or singular value spectrum bounds. Setting alpha equal to the first trial r assumes uniform gradient scale invariance across tasks without theoretical justification.",
                     "confidence": "high"
@@ -161,7 +42,7 @@ def get_lora_review_run(run_id: int) -> str:
             "strengths": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b03"],
-                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so âˆ† W = BA is initially zero at the beginning of training.",
+                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so ∆ W = BA is initially zero at the beginning of training.",
                     "critique_dimension": "reproducibility",
                     "critique_text": "The initialization strategy is precisely specified and structurally sound: initializing B to zero and A with Gaussian noise guarantees Delta W = 0 at step 0, preserving exact pre-trained model behavior at initialization without warm-up perturbations.",
                     "confidence": "high"
@@ -187,7 +68,7 @@ def get_lora_review_run(run_id: int) -> str:
             "critiques": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b04"],
-                    "quoted_evidence": "When optimizing with Adam, tuning Î± is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set Î± to the first r we try and do not tune it.",
+                    "quoted_evidence": "When optimizing with Adam, tuning α is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set α to the first r we try and do not tune it.",
                     "critique_dimension": "assumptions",
                     "critique_text": "Setting alpha to the first rank r tried assumes scale invariance without theoretical justification.",
                     "confidence": "high"
@@ -203,7 +84,7 @@ def get_lora_review_run(run_id: int) -> str:
             "strengths": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b03"],
-                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so âˆ† W = BA is initially zero at the beginning of training.",
+                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so ∆ W = BA is initially zero at the beginning of training.",
                     "critique_dimension": "reproducibility",
                     "critique_text": "Exact initialization specified: B=0, A~Gaussian, ensuring identity preservation at step 0.",
                     "confidence": "high"
@@ -229,7 +110,7 @@ def get_lora_review_run(run_id: int) -> str:
             "critiques": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b04"],
-                    "quoted_evidence": "When optimizing with Adam, tuning Î± is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set Î± to the first r we try and do not tune it.",
+                    "quoted_evidence": "When optimizing with Adam, tuning α is roughly the same as tuning the learning rate if the initialization is scaled. As a result, we simply set α to the first r we try and do not tune it.",
                     "critique_dimension": "assumptions",
                     "critique_text": "Unjustified heuristic rank selection leaves optimal rank choice empirical.",
                     "confidence": "high"
@@ -245,7 +126,7 @@ def get_lora_review_run(run_id: int) -> str:
             "strengths": [
                 {
                     "anchor_ids": ["sec_methodology_4_1_low_rank_parametrized_b03"],
-                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so âˆ† W = BA is initially zero at the beginning of training.",
+                    "quoted_evidence": "We use a random Gaussian initialization for A and zero for B , so ∆ W = BA is initially zero at the beginning of training.",
                     "critique_dimension": "reproducibility",
                     "critique_text": "Zero-initialized B and Gaussian A cleanly avoid initial perturbation.",
                     "confidence": "high"
@@ -304,7 +185,7 @@ def get_attention_review_run(run_id: int) -> str:
                 },
                 {
                     "anchor_ids": ["sec_methodology_5_3_optimizer_b01"],
-                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with Î² 1 = 0 . 9 , Î² 2 = 0 . 98 and Ïµ = 10 âˆ’ 9 .",
+                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with β 1 = 0 . 9 , β 2 = 0 . 98 and ϵ = 10 − 9 .",
                     "critique_dimension": "reproducibility",
                     "critique_text": "Optimizer configuration is fully specified with exact beta1, beta2, epsilon, and custom learning rate scheduling formulas.",
                     "confidence": "high"
@@ -346,7 +227,7 @@ def get_attention_review_run(run_id: int) -> str:
                 },
                 {
                     "anchor_ids": ["sec_methodology_5_3_optimizer_b01"],
-                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with Î² 1 = 0 . 9 , Î² 2 = 0 . 98 and Ïµ = 10 âˆ’ 9 .",
+                    "quoted_evidence": "We used the Adam optimizer [ 20 ] with β 1 = 0 . 9 , β 2 = 0 . 98 and ϵ = 10 − 9 .",
                     "critique_dimension": "reproducibility",
                     "critique_text": "Exact Adam optimizer hyperparameters specified.",
                     "confidence": "high"
@@ -505,100 +386,6 @@ def get_bio_review_run(run_id: int) -> str:
         })
 
 
-
-def get_results_review_for_paper_run(paper_name: str, run_id: int) -> str:
-    """Deterministic Results review fixture grounded in real ResNet parser anchors."""
-
-    if "resnet" not in paper_name.lower() and "residual" not in paper_name.lower():
-        return json.dumps({"critiques": [], "strengths": []})
-
-    reviews = {
-        1: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_results_4_1_imagenet_classificati_b01"],
-                    "quoted_evidence": "We evaluate our method on the ImageNet 2012 classification dataset",
-                    "critique_dimension": "experimental_reproducibility",
-                    "critique_text": "The Results section clearly identifies the ImageNet dataset and the training and validation set sizes, although all implementation details required for exact reproduction are not contained in this result block.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_results_4_1_imagenet_classificati_b98", "sec_results_4_1_imagenet_classificati_b99"],
-                    "quoted_evidence": "plain ResNet 18 layers 27.94 27.88 34 layers 28.54 25.03",
-                    "critique_dimension": "evaluation_rigor",
-                    "critique_text": "The reported ImageNet error rates provide direct quantitative comparisons between network depths and model types.",
-                    "confidence": "high",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_results_4_1_imagenet_classificati_b119"],
-                    "quoted_evidence": "the 34-layer ResNet is better than the 18-layer ResNet",
-                    "critique_dimension": "results_interpretation",
-                    "critique_text": "The authors explicitly interpret the comparative performance results and connect the observed improvement to residual learning.",
-                    "confidence": "high",
-                }
-            ],
-        },
-        2: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_results_4_2_cifar_10_and_analysis_b01"],
-                    "quoted_evidence": "We conducted more studies on the CIFAR-10 dataset",
-                    "critique_dimension": "experimental_design",
-                    "critique_text": "The evaluation extends the analysis to a second benchmark dataset with a separate training and testing setup.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_results_4_2_cifar_10_and_analysis_b05", "sec_results_4_2_cifar_10_and_analysis_b06"],
-                    "quoted_evidence": "Classification error on the CIFAR-10 test set",
-                    "critique_dimension": "evaluation_rigor",
-                    "critique_text": "The CIFAR-10 experiment reports quantitative classification error across multiple network configurations and includes repeated runs for ResNet-110.",
-                    "confidence": "high",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_results_4_2_cifar_10_and_analysis_b09", "sec_results_4_2_cifar_10_and_analysis_b10"],
-                    "quoted_evidence": "our ResNets manage to overcome the optimization difficulty",
-                    "critique_dimension": "results_interpretation",
-                    "critique_text": "The Results section explicitly relates the observed depth-performance trend to the optimization behavior of residual networks.",
-                    "confidence": "high",
-                }
-            ],
-        },
-        3: {
-            "critiques": [
-                {
-                    "anchor_ids": ["sec_results_4_3_object_detection_on_p_b01"],
-                    "quoted_evidence": "Our method has good generalization performance on other recognition tasks.",
-                    "critique_dimension": "experimental_design",
-                    "critique_text": "The evaluation extends beyond classification to object detection on PASCAL VOC and COCO, testing generalization to another recognition task.",
-                    "confidence": "high",
-                },
-                {
-                    "anchor_ids": ["sec_results_4_2_cifar_10_and_analysis_b59", "sec_results_4_2_cifar_10_and_analysis_b60"],
-                    "quoted_evidence": "Object detection mAP (%)",
-                    "critique_dimension": "evaluation_rigor",
-                    "critique_text": "Object detection performance is reported with quantitative mAP metrics on established benchmark datasets.",
-                    "confidence": "high",
-                },
-            ],
-            "strengths": [
-                {
-                    "anchor_ids": ["sec_results_4_1_imagenet_classificati_b140"],
-                    "quoted_evidence": "ResNet reduces the top-1 error by 3.5%",
-                    "critique_dimension": "results_interpretation",
-                    "critique_text": "The main ImageNet improvement is explicitly quantified and linked to the residual learning approach.",
-                    "confidence": "high",
-                }
-            ],
-        },
-    }
-
-    return json.dumps(reviews[run_id])
-
-
 def get_review_for_paper_run(paper_name: str, run_id: int) -> str:
     p = paper_name.lower()
     if "resnet" in p or "residual" in p:
@@ -643,9 +430,7 @@ def run_phase3_evaluation():
             )
             report = critic.critique_paper(struct)
             raw_reports.append(report)
-            print(f"  Run {run_id}: {len(report.critiques)} verified critiques, {len(report.strengths)} verified strengths.")
-
-        # 1B. Run N=3 Results Critic Passes
+            print(f"  Run {run_id}: {len(report.critiques)} verified critiques, {len(report.strengths)} verified strengths.")        # 1B. Run N=3 Results Critic Passes
         print("Executing N=3 independent Results Critic passes...")
         results_raw_reports = []
 
@@ -710,7 +495,7 @@ def run_phase3_evaluation():
             ("Method Appropriateness", scores.appropriateness),
         ]
         for name, ds in dim_objects:
-            print(f"â–¶ {name.upper()} (Final Score: {ds.rating}/5)")
+            print(f"▶ {name.upper()} (Final Score: {ds.rating}/5)")
             print(f"  Anchors  : {ds.based_on_anchor_ids}")
             print(f"  Reasoning: {ds.reasoning}\n")
 
